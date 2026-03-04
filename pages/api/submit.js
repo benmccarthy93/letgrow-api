@@ -1,144 +1,131 @@
-// pages/api/submit.js
+// /pages/api/submit.js
 import { createClient } from "@supabase/supabase-js";
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+// Optional: allow multiple origins (comma-separated) OR single origin
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN;
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS; // e.g. "https://letgrow.co.uk,https://www.letgrow.co.uk"
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { persistSession: false },
+});
 
 function getAllowedOrigins() {
-  // Preferred: ALLOWED_ORIGINS="https://a.com,https://b.com"
-  const list = process.env.ALLOWED_ORIGINS;
-  if (list && list.trim().length) {
-    return list.split(",").map((o) => o.trim()).filter(Boolean);
+  if (ALLOWED_ORIGINS && ALLOWED_ORIGINS.trim().length > 0) {
+    return ALLOWED_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean);
   }
-
-  // Backwards compatible: ALLOWED_ORIGIN="https://a.com"
-  const single = process.env.ALLOWED_ORIGIN;
-  if (single && single.trim().length) return [single.trim()];
-
+  if (ALLOWED_ORIGIN && ALLOWED_ORIGIN.trim().length > 0) {
+    return [ALLOWED_ORIGIN.trim()];
+  }
   return [];
 }
 
-function isValidHttpUrl(value) {
-  try {
-    const u = new URL(value);
-    return u.protocol === "http:" || u.protocol === "https:";
-  } catch {
-    return false;
-  }
+function isOriginAllowed(origin) {
+  if (!origin) return false;
+  const allowed = getAllowedOrigins();
+  return allowed.includes(origin);
 }
 
 export default async function handler(req, res) {
-  // --- CORS ---
   const origin = req.headers.origin;
-  const allowedOrigins = getAllowedOrigins();
 
-  if (origin && allowedOrigins.includes(origin)) {
+  // Basic CORS
+  if (origin && isOriginAllowed(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Credentials", "true");
   }
-  res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
+  // Preflight
   if (req.method === "OPTIONS") {
-    // If you want to hard-block unknown origins even for OPTIONS:
-    if (origin && allowedOrigins.length && !allowedOrigins.includes(origin)) {
-      return res.status(403).end("Forbidden origin");
-    }
-    return res.status(200).end();
+    return res.status(204).end();
   }
 
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // If you want strict origin enforcement:
-  if (origin && allowedOrigins.length && !allowedOrigins.includes(origin)) {
+  // Reject if origin is present but not allowed (Framer/web browsers will send Origin)
+  if (origin && !isOriginAllowed(origin)) {
     return res.status(403).json({ error: "Forbidden origin" });
   }
 
   try {
-    const { name, email, listing_url, marketing_consent, tier } = req.body ?? {};
-
-    // --- Basic validation ---
-    if (!name || typeof name !== "string" || name.trim().length < 2) {
-      return res.status(400).json({ error: "Invalid name" });
-    }
-    if (
-      !email ||
-      typeof email !== "string" ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-    ) {
-      return res.status(400).json({ error: "Invalid email" });
-    }
-    if (
-      !listing_url ||
-      typeof listing_url !== "string" ||
-      !isValidHttpUrl(listing_url)
-    ) {
-      return res.status(400).json({ error: "Invalid listing_url" });
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+      return res.status(500).json({ error: "Server misconfigured: missing Supabase env vars" });
     }
 
-    const leadTier =
-      typeof tier === "string" && tier.trim().length ? tier.trim() : "starter";
+    const {
+      name,
+      email,
+      listing_url,
+      marketing_consent,
+      // tier may arrive from some forms, but we DO NOT insert it into leads (since you removed the column)
+      tier,
+    } = req.body || {};
 
-    const consent = Boolean(marketing_consent);
+    // Minimal validation
+    if (!name || !email || !listing_url) {
+      return res.status(400).json({ error: "Missing required fields: name, email, listing_url" });
+    }
 
-    // --- 1) Insert lead ---
+    // Normalise marketing consent to boolean
+    const marketingConsentBool = !!marketing_consent;
+
+    // 1) Insert lead (NO tier column)
     const { data: lead, error: leadError } = await supabase
       .from("leads")
-      .insert({
-        name: name.trim(),
-        email: email.trim().toLowerCase(),
-        listing_url: listing_url.trim(),
-        marketing_consent: consent,
-        tier: leadTier,
-      })
-      .select("id")
+      .insert([
+        {
+          name: String(name).trim(),
+          email: String(email).trim().toLowerCase(),
+          listing_url: String(listing_url).trim(),
+          marketing_consent: marketingConsentBool,
+        },
+      ])
+      .select()
       .single();
 
-    if (leadError || !lead?.id) {
+    if (leadError) {
       console.error("Lead insert error:", leadError);
-      return res.status(500).json({ error: "Failed to create lead" });
+      return res.status(500).json({ error: leadError.message || "Failed to create lead" });
     }
 
-    // --- 2) Create job linked to lead ---
+    // 2) Create job linked to lead
+    // You CAN store tier on jobs (recommended), even if you removed it from leads.
+    const jobPayload = {
+      lead_id: lead.id,
+      status: "queued",
+    };
+
+    // If your jobs table has a tier column and you want it:
+    if (typeof tier === "string" && tier.trim().length > 0) {
+      jobPayload.tier = tier.trim();
+    }
+
     const { data: job, error: jobError } = await supabase
       .from("jobs")
-      .insert({
-        lead_id: lead.id,
-        status: "queued",
-        // result_json, error, score left NULL initially
-      })
-      .select("id")
+      .insert([jobPayload])
+      .select()
       .single();
 
-    if (jobError || !job?.id) {
+    if (jobError) {
       console.error("Job insert error:", jobError);
-      return res.status(500).json({ error: "Failed to create job" });
+
+      // Optional cleanup: if job creation fails, you might want to delete the lead to avoid orphan leads.
+      // Commented out by default.
+      // await supabase.from("leads").delete().eq("id", lead.id);
+
+      return res.status(500).json({ error: jobError.message || "Failed to create job" });
     }
 
-    // --- 3) Optional: trigger scoring webhook (if configured) ---
-    const webhookUrl = process.env.SCORING_WEBHOOK_URL;
-    if (webhookUrl && isValidHttpUrl(webhookUrl)) {
-      // Fire-and-forget (don’t block the response)
-      fetch(webhookUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          job_id: job.id,
-          lead_id: lead.id,
-          listing_url: listing_url.trim(),
-          tier: leadTier,
-        }),
-      }).catch((e) => console.error("Webhook trigger failed:", e));
-    }
-
+    // 3) Return job_id
     return res.status(200).json({ job_id: job.id });
   } catch (e) {
-    console.error("Unhandled submit error:", e);
+    console.error("Unhandled error:", e);
     return res.status(500).json({ error: "Server error" });
   }
 }
