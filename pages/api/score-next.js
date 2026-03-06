@@ -8,7 +8,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 
-const SCORING_VERSION = "v3_strict";
+const SCORING_VERSION = "v3_strict_amenities";
 
 // -----------------------------
 // Helpers
@@ -326,31 +326,8 @@ const DESCRIPTION_RULES = {
   ],
 };
 
-const AMENITY_RULES = {
-  practical: [
-    { key: "wifi", patterns: ["wifi", "wi-fi"], points: 2 },
-    { key: "kitchen", patterns: ["kitchen"], points: 2 },
-    { key: "washer", patterns: ["washing machine", "washer"], points: 2 },
-    { key: "tv", patterns: ["tv"], points: 2 },
-    { key: "heating", patterns: ["heating"], points: 2 },
-    { key: "self_check_in", patterns: ["self check-in", "self check in", "lockbox", "smart lock", "keypad"], points: 2 },
-    { key: "workspace", patterns: ["workspace", "desk", "dedicated workspace"], points: 2 },
-    { key: "parking", patterns: ["parking", "free parking", "driveway", "garage"], points: 2 },
-  ],
-  bonus: [
-    { key: "dryer", patterns: ["dryer", "tumble dryer"], points: 1 },
-    { key: "aircon", patterns: ["air conditioning", "ac"], points: 1 },
-    { key: "dishwasher", patterns: ["dishwasher"], points: 1 },
-    { key: "coffee", patterns: ["coffee machine", "coffee maker"], points: 1 },
-    { key: "hot_tub", patterns: ["hot tub"], points: 1 },
-    { key: "outside_space", patterns: ["balcony", "terrace", "garden", "patio"], points: 1 },
-    { key: "lift", patterns: ["lift", "elevator"], points: 1 },
-    { key: "ev", patterns: ["ev charger", "charger"], points: 0.5 },
-  ],
-};
-
 // -----------------------------
-// Stricter scoring
+// Scoring
 // -----------------------------
 
 function scoreTitle(title) {
@@ -377,8 +354,16 @@ function scoreTitle(title) {
 
   if (tooShort || tooLong || emojiCount >= 3 || fillerCount >= 3) {
     score = 1 + (propertyTypeCount > 0 ? 1 : 0) + (differentiatorCount > 0 ? 1 : 0);
-  } else if (hasUsefulLength && propertyTypeCount > 0 && (differentiatorCount > 0 || guestFitCount > 0)) {
-    score = 8 + (guestFitCount > 0 ? 1 : 0) + (emojiCount === 0 ? 1 : 0) + (fillerCount === 0 ? 1 : 0);
+  } else if (
+    hasUsefulLength &&
+    propertyTypeCount > 0 &&
+    (differentiatorCount > 0 || guestFitCount > 0)
+  ) {
+    score =
+      8 +
+      (guestFitCount > 0 ? 1 : 0) +
+      (emojiCount === 0 ? 1 : 0) +
+      (fillerCount === 0 ? 1 : 0);
   } else if (hasUsefulLength || propertyTypeCount > 0) {
     score = 3 + (propertyTypeCount > 0 ? 1 : 0) + (differentiatorCount > 0 ? 1 : 0);
   } else {
@@ -416,12 +401,30 @@ function scoreDescription(description, amenityTitles) {
     countRegexMatches(opening, DESCRIPTION_RULES.distanceRegexes) >= 1;
 
   const claims = [
-    { mention: containsAny(lower, ["parking", "garage", "driveway"]), support: hasAmenity(amenityTitles, ["parking", "free parking", "garage", "driveway"]) },
-    { mention: containsAny(lower, ["workspace", "desk", "remote work"]), support: hasAmenity(amenityTitles, ["workspace", "desk", "dedicated workspace", "wifi", "wi-fi"]) },
-    { mention: containsAny(lower, ["self check-in", "self check in"]), support: hasAmenity(amenityTitles, ["self check-in", "self check in", "lockbox", "smart lock", "keypad"]) },
-    { mention: containsAny(lower, ["washer", "washing machine", "laundry"]), support: hasAmenity(amenityTitles, ["washer", "washing machine", "dryer", "tumble dryer"]) },
-    { mention: containsAny(lower, ["kitchen"]), support: hasAmenity(amenityTitles, ["kitchen"]) },
-    { mention: containsAny(lower, ["air conditioning", "ac"]), support: hasAmenity(amenityTitles, ["air conditioning", "ac"]) },
+    {
+      mention: containsAny(lower, ["parking", "garage", "driveway"]),
+      support: hasAmenity(amenityTitles, ["parking", "free parking", "garage", "driveway"]),
+    },
+    {
+      mention: containsAny(lower, ["workspace", "desk", "remote work"]),
+      support: hasAmenity(amenityTitles, ["workspace", "desk", "dedicated workspace", "wifi", "wi-fi"]),
+    },
+    {
+      mention: containsAny(lower, ["self check-in", "self check in"]),
+      support: hasAmenity(amenityTitles, ["self check-in", "self check in", "lockbox", "smart lock", "keypad"]),
+    },
+    {
+      mention: containsAny(lower, ["washer", "washing machine", "laundry"]),
+      support: hasAmenity(amenityTitles, ["washer", "washing machine", "dryer", "tumble dryer"]),
+    },
+    {
+      mention: containsAny(lower, ["kitchen"]),
+      support: hasAmenity(amenityTitles, ["kitchen"]),
+    },
+    {
+      mention: containsAny(lower, ["air conditioning", "ac"]),
+      support: hasAmenity(amenityTitles, ["air conditioning", "ac"]),
+    },
   ];
 
   const claimsWithoutSupport = claims.filter((c) => c.mention && !c.support).length;
@@ -435,7 +438,11 @@ function scoreDescription(description, amenityTitles) {
   } else if (descLength < 250 || !openingHasValue) {
     score = 3 + Math.min(specificity, 2) + (hasStructure ? 1 : 0);
   } else {
-    score = 6 + Math.min(specificity, 4) + (openingHasValue ? 1 : 0) + (hasStructure ? 1 : 0);
+    score =
+      6 +
+      Math.min(specificity, 4) +
+      (openingHasValue ? 1 : 0) +
+      (hasStructure ? 1 : 0);
   }
 
   if (descLength > 1200) score -= 1;
@@ -499,43 +506,180 @@ function scorePhotos(property) {
 function scoreAmenities(property) {
   const amenityTitles = normaliseAmenityTitles(property?.amenities || []);
   const descriptionLower = toLowerText(property?.description || "");
+  const titleLower = String(property?.title || "").toLowerCase();
+  const combinedText = `${titleLower} ${descriptionLower}`;
+  const amenityCount = amenityTitles.length;
 
-  let score = 0;
-  let practicalHits = 0;
-  let practicalMissingCount = 0;
+  // ---------
+  // Relevance signals
+  // ---------
+  const guestFitSignals = {
+    business:
+      containsAny(combinedText, [
+        "business",
+        "remote work",
+        "workspace",
+        "desk",
+        "work trip",
+        "contractor",
+        "contractors",
+        "long stay",
+      ]),
+    family:
+      containsAny(combinedText, [
+        "family",
+        "families",
+        "child",
+        "children",
+        "baby",
+        "infant",
+      ]),
+    carBased:
+      containsAny(combinedText, [
+        "parking",
+        "driveway",
+        "garage",
+        "rural",
+        "country",
+        "cottage",
+        "cabin",
+      ]),
+    leisure:
+      containsAny(combinedText, [
+        "balcony",
+        "terrace",
+        "garden",
+        "views",
+        "hot tub",
+        "pool",
+        "fireplace",
+        "break",
+      ]),
+    longStay:
+      containsAny(combinedText, [
+        "long stay",
+        "long term",
+        "contractor",
+        "contractors",
+        "business",
+        "remote work",
+      ]),
+  };
+
+  // ---------
+  // Essential practical base out of 10
+  // ---------
+  const essentials = {
+    wifi: hasAmenity(amenityTitles, ["wifi", "wi-fi"]),
+    kitchen: hasAmenity(amenityTitles, ["kitchen"]),
+    heating: hasAmenity(amenityTitles, ["heating"]),
+    washer: hasAmenity(amenityTitles, ["washing machine", "washer"]),
+    tv: hasAmenity(amenityTitles, ["tv"]),
+    selfCheckIn: hasAmenity(amenityTitles, [
+      "self check-in",
+      "self check in",
+      "lockbox",
+      "smart lock",
+      "keypad",
+    ]),
+    hotWater: hasAmenity(amenityTitles, ["hot water"]),
+    fridge: hasAmenity(amenityTitles, ["refrigerator", "fridge"]),
+    cookingBasics: hasAmenity(amenityTitles, [
+      "cooking basics",
+      "pots and pans",
+      "oven",
+      "microwave",
+      "stove",
+      "hob",
+    ]),
+  };
+
+  let essentialScore = 0;
+  essentialScore += essentials.wifi ? 2 : 0;
+  essentialScore += essentials.kitchen ? 2 : 0;
+  essentialScore += essentials.heating ? 1 : 0;
+  essentialScore += essentials.washer ? 1.5 : 0;
+  essentialScore += essentials.tv ? 1 : 0;
+  essentialScore += essentials.selfCheckIn ? 1 : 0;
+  essentialScore += essentials.hotWater ? 0.75 : 0;
+  essentialScore += essentials.fridge ? 0.75 : 0;
+  essentialScore += essentials.cookingBasics ? 1 : 0;
+
+  const essentialMissing = Object.entries(essentials)
+    .filter(([, present]) => !present)
+    .map(([key]) => key);
+
+  // ---------
+  // High-value convenience out of 6
+  // ---------
+  const convenience = {
+    parking: hasAmenity(amenityTitles, ["parking", "free parking", "driveway", "garage"]),
+    workspace: hasAmenity(amenityTitles, ["workspace", "desk", "dedicated workspace"]),
+    dryer: hasAmenity(amenityTitles, ["dryer", "tumble dryer"]),
+    aircon: hasAmenity(amenityTitles, ["air conditioning", "ac"]),
+    dishwasher: hasAmenity(amenityTitles, ["dishwasher"]),
+    lift: hasAmenity(amenityTitles, ["lift", "elevator"]),
+    iron: hasAmenity(amenityTitles, ["iron"]),
+    coffee: hasAmenity(amenityTitles, ["coffee machine", "coffee maker"]),
+  };
+
+  let convenienceScore = 0;
+
+  if (convenience.parking) convenienceScore += guestFitSignals.carBased ? 1.5 : 1;
+  if (convenience.workspace) convenienceScore += guestFitSignals.business ? 1.5 : 1;
+  if (convenience.dryer) convenienceScore += guestFitSignals.longStay ? 1 : 0.75;
+  if (convenience.aircon) convenienceScore += 1;
+  if (convenience.dishwasher) convenienceScore += 0.5;
+  if (convenience.lift) convenienceScore += 0.5;
+  if (convenience.iron) convenienceScore += guestFitSignals.business ? 0.5 : 0.25;
+  if (convenience.coffee) convenienceScore += 0.5;
+
+  convenienceScore = Math.min(convenienceScore, 6);
+
+  // ---------
+  // Segment-fit / standout extras out of 4
+  // ---------
+  const extras = {
+    familyKit: hasAmenity(amenityTitles, ["high chair", "travel cot", "crib", "cot", "stair gate"]),
+    outdoorSpace: hasAmenity(amenityTitles, ["balcony", "terrace", "garden", "patio"]),
+    premiumLeisure: hasAmenity(amenityTitles, ["hot tub", "pool", "fireplace", "log burner", "wood burner"]),
+    accessibility: hasAmenity(amenityTitles, ["step-free", "step free", "accessible", "wheelchair"]),
+    ev: hasAmenity(amenityTitles, ["ev charger", "charger"]),
+    pet: hasAmenity(amenityTitles, ["pet friendly", "pets allowed", "dog friendly"]),
+  };
+
+  let extrasScore = 0;
+
+  if (extras.familyKit) extrasScore += guestFitSignals.family ? 1 : 0.5;
+  if (extras.outdoorSpace) extrasScore += guestFitSignals.leisure ? 1 : 0.75;
+  if (extras.premiumLeisure) extrasScore += 1;
+  if (extras.accessibility) extrasScore += 1;
+  else if (extras.ev) extrasScore += 0.75;
+  else if (extras.pet) extrasScore += 0.75;
+
+  extrasScore = Math.min(extrasScore, 4);
+
+  let score = essentialScore + convenienceScore + extrasScore;
+
+  // ---------
+  // Copy/amenity consistency checks
+  // ---------
   const mismatchFlags = [];
 
-  for (const rule of AMENITY_RULES.practical) {
-    const present = hasAmenity(amenityTitles, rule.patterns);
-    if (present) {
-      score += rule.points;
-      practicalHits += 1;
-    } else {
-      practicalMissingCount += 1;
-    }
-  }
-
-  let bonusPoints = 0;
-  for (const rule of AMENITY_RULES.bonus) {
-    if (hasAmenity(amenityTitles, rule.patterns)) {
-      bonusPoints += rule.points;
-    }
-  }
-  score += Math.min(bonusPoints, 4);
-
   const consistencyChecks = [
-    { key: "wifi", patterns: ["wifi", "wi-fi"] },
-    { key: "parking", patterns: ["parking", "garage", "driveway"] },
-    { key: "workspace", patterns: ["workspace", "desk", "remote work"] },
-    { key: "family", patterns: ["family", "high chair", "travel cot", "crib"] },
-    { key: "pets", patterns: ["pet friendly", "dog friendly"] },
+    { key: "wifi", mentioned: ["wifi", "wi-fi", "fast wifi"], amenity: ["wifi", "wi-fi"] },
+    { key: "parking", mentioned: ["parking", "driveway", "garage"], amenity: ["parking", "free parking", "driveway", "garage"] },
+    { key: "workspace", mentioned: ["workspace", "desk", "remote work"], amenity: ["workspace", "desk", "dedicated workspace"] },
+    { key: "family", mentioned: ["family", "baby", "child", "children"], amenity: ["high chair", "travel cot", "crib", "cot"] },
+    { key: "pets", mentioned: ["pet friendly", "dog friendly"], amenity: ["pet friendly", "pets allowed", "dog friendly"] },
+    { key: "self_check_in", mentioned: ["self check-in", "self check in"], amenity: ["self check-in", "self check in", "lockbox", "smart lock", "keypad"] },
   ];
 
   for (const check of consistencyChecks) {
-    const mentionedInDescription = check.patterns.some((pattern) =>
+    const mentionedInDescription = check.mentioned.some((pattern) =>
       descriptionLower.includes(pattern)
     );
-    const presentInAmenities = hasAmenity(amenityTitles, check.patterns);
+    const presentInAmenities = hasAmenity(amenityTitles, check.amenity);
 
     if (mentionedInDescription && !presentInAmenities) {
       mismatchFlags.push(check.key);
@@ -543,16 +687,78 @@ function scoreAmenities(property) {
     }
   }
 
-  if (containsAny(descriptionLower, ["family", "business", "remote work", "contractor", "long stay"])) {
-    score += 1;
+  // ---------
+  // Missing-basic penalties
+  // ---------
+  const missingBasicPenalties = [];
+
+  if (!essentials.wifi) {
+    score -= 3;
+    missingBasicPenalties.push("wifi");
   }
 
+  if (!essentials.kitchen) {
+    score -= 3;
+    missingBasicPenalties.push("kitchen");
+  }
+
+  if (!essentials.washer) {
+    score -= 2;
+    missingBasicPenalties.push("washer");
+  }
+
+  if (!essentials.selfCheckIn) {
+    score -= 1;
+    missingBasicPenalties.push("self_check_in");
+  }
+
+  if (guestFitSignals.carBased && !convenience.parking) {
+    score -= 2;
+    missingBasicPenalties.push("parking_relevant_missing");
+  }
+
+  if ((guestFitSignals.business || guestFitSignals.longStay) && !convenience.workspace) {
+    score -= 2;
+    missingBasicPenalties.push("workspace_relevant_missing");
+  }
+
+  // ---------
+  // Amenity count cap
+  // ---------
+  let amenityCountCap = 20;
+
+  if (amenityCount < 15) amenityCountCap = 12;
+  else if (amenityCount < 25) amenityCountCap = 15;
+  else if (amenityCount < 40) amenityCountCap = 18;
+
+  // Missing several essentials should cap hard
+  const missingEssentialCount = essentialMissing.length;
+  if (missingEssentialCount >= 4) amenityCountCap = Math.min(amenityCountCap, 10);
+  else if (missingEssentialCount >= 2) amenityCountCap = Math.min(amenityCountCap, 14);
+
+  // Too many mismatches should also cap
+  if (mismatchFlags.length >= 3) amenityCountCap = Math.min(amenityCountCap, 12);
+  else if (mismatchFlags.length >= 1) amenityCountCap = Math.min(amenityCountCap, 16);
+
+  score = Math.min(score, amenityCountCap);
+  score = clamp(Math.round(score), 0, 20);
+
   return {
-    score: clamp(score, 0, 20),
+    score,
     amenityTitles,
-    practicalHits,
-    practicalMissingCount,
+    amenityCount,
+    practicalHits: Object.values(essentials).filter(Boolean).length,
+    practicalMissingCount: missingEssentialCount,
     mismatchFlags,
+    essentialMissing,
+    missingBasicPenalties,
+    amenityCountCap,
+    guestFitSignals,
+    breakdown: {
+      essentialScore: Number(essentialScore.toFixed(2)),
+      convenienceScore: Number(convenienceScore.toFixed(2)),
+      extrasScore: Number(extrasScore.toFixed(2)),
+    },
   };
 }
 
@@ -587,7 +793,7 @@ function scoreTrust(property, amenityTitles) {
 
   let safetyScore = 0;
   if (safetyFlags.smokeAlarm) safetyScore += 1;
-  if (safetyFlags.carbonMonoxide) safetyScore += 1;
+  if (safetyFlags.carMonoxide) safetyScore += 1;
   if (hasAmenity(amenityTitles, ["first aid kit", "fire extinguisher"])) safetyScore += 1;
   if (hasAmenity(amenityTitles, ["self check-in", "self check in", "lockbox", "smart lock", "keypad"])) safetyScore += 1;
   if (hasAmenity(amenityTitles, ["security camera", "security cameras", "building staff", "gated"])) safetyScore += 1;
@@ -748,7 +954,15 @@ function buildCategoryMessages({
   };
 }
 
-function buildTopFixes({ overallScore, photoScore, trustScore, amenityScore, titleScore, descriptionScore, marketScore }) {
+function buildTopFixes({
+  overallScore,
+  photoScore,
+  trustScore,
+  amenityScore,
+  titleScore,
+  descriptionScore,
+  marketScore,
+}) {
   let improvementPotential = 0;
 
   if (photoScore < 12) improvementPotential += 7;
@@ -858,10 +1072,17 @@ export default async function handler(req, res) {
 
     const titleScore = scoreTitle(property.title);
     const amenityData = scoreAmenities(property);
-    const descriptionData = scoreDescription(property.description, amenityData.amenityTitles);
+    const descriptionData = scoreDescription(
+      property.description,
+      amenityData.amenityTitles
+    );
     const photoData = scorePhotos(property);
     const trustData = scoreTrust(property, amenityData.amenityTitles);
-    const positioningData = scoreCompetitivePositioning(property, amenityData, photoData);
+    const positioningData = scoreCompetitivePositioning(
+      property,
+      amenityData,
+      photoData
+    );
 
     const descriptionScore = descriptionData.score;
     const photoScore = photoData.score;
@@ -906,7 +1127,10 @@ export default async function handler(req, res) {
     }
 
     if (photoData.photoCount >= 44) {
-      penaltiesApplied.push({ key: "photo_overload", value: photoData.photoCount >= 60 ? 4 : 2 });
+      penaltiesApplied.push({
+        key: "photo_overload",
+        value: photoData.photoCount >= 60 ? 4 : 2,
+      });
     }
 
     const penaltyTotal = penaltiesApplied.reduce((sum, item) => sum + item.value, 0);
@@ -974,7 +1198,10 @@ export default async function handler(req, res) {
       description: {
         length: stripHtml(property.description || "").length,
         has_distance_signal:
-          countRegexMatches(stripHtml(property.description || ""), DESCRIPTION_RULES.distanceRegexes) > 0,
+          countRegexMatches(
+            stripHtml(property.description || ""),
+            DESCRIPTION_RULES.distanceRegexes
+          ) > 0,
         claims_without_support: descriptionData.claimsWithoutSupport,
       },
       photos: {
@@ -982,9 +1209,15 @@ export default async function handler(req, res) {
         room_signals: photoData.roomSignals,
       },
       amenities: {
+        amenity_count: amenityData.amenityCount,
         practical_hits: amenityData.practicalHits,
         practical_missing_count: amenityData.practicalMissingCount,
         mismatch_flags: amenityData.mismatchFlags,
+        essential_missing: amenityData.essentialMissing,
+        missing_basic_penalties: amenityData.missingBasicPenalties,
+        amenity_count_cap: amenityData.amenityCountCap,
+        guest_fit_signals: amenityData.guestFitSignals,
+        breakdown: amenityData.breakdown,
       },
       trust: {
         review_volume_score: trustData.reviewVolumeScore,
@@ -1005,7 +1238,7 @@ export default async function handler(req, res) {
         score_label: scoreLabel,
         title_score: titleScore,
         description_score: descriptionScore,
-        photo_score: photoScore,
+        photo_score: photoData.score,
         amenity_score: amenityScore,
         trust_score: trustScore,
         market_score: marketScore,
