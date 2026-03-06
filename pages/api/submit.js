@@ -16,9 +16,11 @@ function getAllowedOrigins() {
   if (ALLOWED_ORIGINS && ALLOWED_ORIGINS.trim().length > 0) {
     return ALLOWED_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean);
   }
+
   if (ALLOWED_ORIGIN && ALLOWED_ORIGIN.trim().length > 0) {
     return [ALLOWED_ORIGIN.trim()];
   }
+
   return [];
 }
 
@@ -44,13 +46,23 @@ function normaliseUrl(url) {
 
 function extractAirbnbListingId(url) {
   const value = String(url).trim();
-
   const match = value.match(/airbnb\.[^/]+\/rooms\/(\d+)/i);
+
   if (match && match[1]) {
     return match[1];
   }
 
   return null;
+}
+
+function parseMarketingConsent(value) {
+  return (
+    value === true ||
+    value === "true" ||
+    value === "on" ||
+    value === 1 ||
+    value === "1"
+  );
 }
 
 export default async function handler(req, res) {
@@ -78,18 +90,17 @@ export default async function handler(req, res) {
 
   try {
     if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-      return res.status(500).json({ error: "Server misconfigured: missing Supabase env vars" });
+      return res
+        .status(500)
+        .json({ error: "Server misconfigured: missing Supabase env vars" });
     }
 
-    const {
-      name,
-      email,
-      listing_url,
-      marketing_consent,
-    } = req.body || {};
+    const { name, email, listing_url, marketing_consent } = req.body || {};
 
     if (!name || !email || !listing_url) {
-      return res.status(400).json({ error: "Missing required fields: name, email, listing_url" });
+      return res
+        .status(400)
+        .json({ error: "Missing required fields: name, email, listing_url" });
     }
 
     const trimmedName = String(name).trim();
@@ -99,6 +110,7 @@ export default async function handler(req, res) {
     const jobId = generateJobId();
     const normalisedUrl = normaliseUrl(trimmedListingUrl);
     const airbnbListingId = extractAirbnbListingId(trimmedListingUrl);
+    const marketingConsentBool = parseMarketingConsent(marketing_consent);
 
     const submissionPayload = {
       full_name: trimmedName,
@@ -111,6 +123,7 @@ export default async function handler(req, res) {
       job_id: jobId,
       normalised_url: normalisedUrl,
       airbnb_listing_id: airbnbListingId,
+      marketing_consent: marketingConsentBool,
     };
 
     const { data: submission, error: submissionError } = await supabase
@@ -121,7 +134,9 @@ export default async function handler(req, res) {
 
     if (submissionError) {
       console.error("Submission insert error:", submissionError);
-      return res.status(500).json({ error: submissionError.message || "Failed to create submission" });
+      return res
+        .status(500)
+        .json({ error: submissionError.message || "Failed to create submission" });
     }
 
     return res.status(200).json({
