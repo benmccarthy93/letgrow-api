@@ -1,3 +1,4 @@
+// /pages/api/score-next.js
 import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -7,7 +8,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 
-const SCORING_VERSION = "v3";
+const SCORING_VERSION = "v3_strict";
 
 // -----------------------------
 // Helpers
@@ -33,6 +34,10 @@ function toLowerText(value) {
 function safeNumber(value) {
   const num = Number(value);
   return Number.isFinite(num) ? num : 0;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function countMatches(text, phrases) {
@@ -62,10 +67,6 @@ function capsRatio(text) {
   if (!letters.length) return 0;
   const uppercase = letters.replace(/[^A-Z]/g, "").length;
   return uppercase / letters.length;
-}
-
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
 }
 
 function normaliseAmenityTitles(amenities) {
@@ -134,7 +135,7 @@ function extractPhotoCount(property) {
 
 function extractReviewCount(property) {
   const directCandidates = [
-    property?.reviews, // this is the important one from your working version
+    property?.reviews,
     property?.reviewsCount,
     property?.review_count,
     property?.reviews_count,
@@ -211,7 +212,7 @@ function detectRoomSignals(property) {
 // -----------------------------
 
 const TITLE_RULES = {
-  idealMinLength: 20,
+  idealMinLength: 18,
   idealMaxLength: 55,
   fillerWords: [
     "cosy",
@@ -263,6 +264,8 @@ const TITLE_RULES = {
     "beachfront",
     "fireplace",
     "views",
+    "king bed",
+    "xl bed",
   ],
   guestFit: [
     "family",
@@ -291,6 +294,8 @@ const DESCRIPTION_RULES = {
     "perfect for",
     "ideal for",
     "good for",
+    "contractor",
+    "contractors",
   ],
   practicalBenefitTokens: [
     "free parking",
@@ -307,6 +312,12 @@ const DESCRIPTION_RULES = {
     "washer",
     "dryer",
     "kitchen",
+    "balcony",
+    "terrace",
+    "garden",
+    "views",
+    "minutes",
+    "walk",
   ],
   distanceRegexes: [
     /\b\d{1,2}\s?(min|mins|minutes)\s?(walk|drive)\b/i,
@@ -339,7 +350,7 @@ const AMENITY_RULES = {
 };
 
 // -----------------------------
-// Scoring
+// Stricter scoring
 // -----------------------------
 
 function scoreTitle(title) {
@@ -357,31 +368,28 @@ function scoreTitle(title) {
   const differentiatorCount = countMatches(lower, TITLE_RULES.differentiators);
   const guestFitCount = countMatches(lower, TITLE_RULES.guestFit);
 
-  if (
+  const hasUsefulLength =
     titleLength >= TITLE_RULES.idealMinLength &&
-    titleLength <= TITLE_RULES.idealMaxLength
-  ) {
-    score += 5;
-  } else if (titleLength >= 15 && titleLength <= 65) {
-    score += 3;
-  } else if (titleLength >= 10 && titleLength <= 80) {
-    score += 1;
+    titleLength <= TITLE_RULES.idealMaxLength;
+
+  const tooShort = titleLength > 0 && titleLength < 18;
+  const tooLong = titleLength > 65;
+
+  if (tooShort || tooLong || emojiCount >= 3 || fillerCount >= 3) {
+    score = 1 + (propertyTypeCount > 0 ? 1 : 0) + (differentiatorCount > 0 ? 1 : 0);
+  } else if (hasUsefulLength && propertyTypeCount > 0 && (differentiatorCount > 0 || guestFitCount > 0)) {
+    score = 8 + (guestFitCount > 0 ? 1 : 0) + (emojiCount === 0 ? 1 : 0) + (fillerCount === 0 ? 1 : 0);
+  } else if (hasUsefulLength || propertyTypeCount > 0) {
+    score = 3 + (propertyTypeCount > 0 ? 1 : 0) + (differentiatorCount > 0 ? 1 : 0);
+  } else {
+    score = 3;
   }
 
-  if (uppercaseRatio < 0.5) score += 2;
-  if (emojiCount === 0 && !/[!*#]{2,}/.test(cleanTitle)) score += 2;
+  if (uppercaseRatio >= 0.6) score -= 1;
+  if (emojiCount >= 2) score -= 2;
+  if (fillerCount >= 2) score -= 1;
 
-  if (propertyTypeCount > 0) score += 2;
-  if (differentiatorCount > 0) score += 3;
-  if (guestFitCount > 0) score += 1;
-
-  if (fillerCount >= 2 && differentiatorCount === 0) score -= 2;
-  if (emojiCount > 2) score -= 2;
-  if (titleLength < 15) score -= 2;
-
-  score = clamp(score, 0, 15);
-
-  return score;
+  return clamp(score, 0, 15);
 }
 
 function scoreDescription(description, amenityTitles) {
@@ -434,10 +442,8 @@ function scoreDescription(description, amenityTitles) {
   if (claimsWithoutSupport >= 3) score -= 2;
   else if (claimsWithoutSupport >= 1) score -= 1;
 
-  score = clamp(score, 0, 15);
-
   return {
-    score,
+    score: clamp(score, 0, 15),
     claimsWithoutSupport,
   };
 }
@@ -457,7 +463,8 @@ function scorePhotos(property) {
   else if (photoCount <= 35) score = 20;
   else if (photoCount <= 43) score = 19;
   else if (photoCount <= 50) score = 18;
-  else score = 16;
+  else if (photoCount <= 60) score = 16;
+  else score = 14;
 
   if (roomSignals.bedroomCoverage) score += 1;
   if (roomSignals.bathroomCoverage) score += 1;
@@ -482,10 +489,8 @@ function scorePhotos(property) {
   if (photoCount <= 15) score = Math.min(score, 12);
   if (photoCount <= 11) score = Math.min(score, 8);
 
-  score = clamp(score, 0, 20);
-
   return {
-    score,
+    score: clamp(score, 0, 20),
     photoCount,
     roomSignals,
   };
@@ -542,10 +547,8 @@ function scoreAmenities(property) {
     score += 1;
   }
 
-  score = clamp(score, 0, 20);
-
   return {
-    score,
+    score: clamp(score, 0, 20),
     amenityTitles,
     practicalHits,
     practicalMissingCount,
@@ -589,10 +592,8 @@ function scoreTrust(property, amenityTitles) {
   if (hasAmenity(amenityTitles, ["self check-in", "self check in", "lockbox", "smart lock", "keypad"])) safetyScore += 1;
   if (hasAmenity(amenityTitles, ["security camera", "security cameras", "building staff", "gated"])) safetyScore += 1;
 
-  const score = clamp(reviewVolumeScore + ratingScore + hostScore + safetyScore, 0, 20);
-
   return {
-    score,
+    score: clamp(reviewVolumeScore + ratingScore + hostScore + safetyScore, 0, 20),
     rating,
     reviewCount,
     safetyFlags,
@@ -641,9 +642,7 @@ function scoreCompetitivePositioning(property, amenityData, photoData) {
   if (workReadiness) score += 1;
   if (photoData.photoCount >= 20) score += 1;
 
-  score = clamp(score, 0, 10);
-
-  return { score };
+  return { score: clamp(score, 0, 10) };
 }
 
 function getOverallLabel(overallScore) {
