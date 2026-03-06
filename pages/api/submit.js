@@ -34,16 +34,6 @@ function generateJobId() {
   return `lg_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
 }
 
-function normaliseUrl(url) {
-  try {
-    const parsed = new URL(String(url).trim());
-    parsed.hash = "";
-    return parsed.toString();
-  } catch {
-    return String(url).trim();
-  }
-}
-
 function extractAirbnbListingId(url) {
   const value = String(url).trim();
   const match = value.match(/airbnb\.[^/]+\/rooms\/(\d+)/i);
@@ -53,6 +43,23 @@ function extractAirbnbListingId(url) {
   }
 
   return null;
+}
+
+function normaliseAirbnbUrl(url) {
+  const listingId = extractAirbnbListingId(url);
+
+  if (listingId) {
+    return `https://www.airbnb.com/rooms/${listingId}`;
+  }
+
+  try {
+    const parsed = new URL(String(url).trim());
+    parsed.hash = "";
+    parsed.search = "";
+    return parsed.toString();
+  } catch {
+    return String(url).trim();
+  }
 }
 
 function parseMarketingConsent(value) {
@@ -106,10 +113,16 @@ export default async function handler(req, res) {
     const trimmedName = String(name).trim();
     const trimmedEmail = String(email).trim().toLowerCase();
     const trimmedListingUrl = String(listing_url).trim();
+    const airbnbListingId = extractAirbnbListingId(trimmedListingUrl);
+
+    if (!airbnbListingId) {
+      return res.status(400).json({
+        error: "Invalid Airbnb listing URL. Please use a valid Airbnb room link.",
+      });
+    }
 
     const jobId = generateJobId();
-    const normalisedUrl = normaliseUrl(trimmedListingUrl);
-    const airbnbListingId = extractAirbnbListingId(trimmedListingUrl);
+    const normalisedUrl = normaliseAirbnbUrl(trimmedListingUrl);
     const marketingConsentBool = parseMarketingConsent(marketing_consent);
 
     const submissionPayload = {
