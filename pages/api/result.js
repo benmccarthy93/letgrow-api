@@ -8,6 +8,26 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 
+function setCorsHeaders(req, res) {
+  const origin = req.headers.origin || "";
+
+  const allowedOrigins = [
+    "https://www.letgrow.co.uk",
+    "https://letgrow.co.uk",
+    "https://letgrow-api.vercel.app",
+    "http://localhost:3000",
+  ];
+
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  } else {
+    res.setHeader("Access-Control-Allow-Origin", "https://www.letgrow.co.uk");
+  }
+
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
 function getInputValue(value) {
   if (Array.isArray(value)) return value[0];
   return value;
@@ -15,7 +35,6 @@ function getInputValue(value) {
 
 function safeJsonParse(value) {
   if (!value) return null;
-
   if (typeof value === "object") return value;
 
   if (typeof value === "string") {
@@ -41,7 +60,7 @@ function mapSubmissionStatus(status) {
 function buildLoadingSteps(status) {
   const s = String(status || "").toLowerCase();
 
-  const steps = [
+  return [
     { key: "submitted", label: "Submitting your listing", done: true },
     {
       key: "fetching",
@@ -59,13 +78,10 @@ function buildLoadingSteps(status) {
       done: ["complete", "scored", "done"].includes(s),
     },
   ];
-
-  return steps;
 }
 
 function normaliseMessages(summary) {
   const parsed = safeJsonParse(summary) || {};
-
   const categoryMessages = Array.isArray(parsed.category_messages)
     ? parsed.category_messages
     : [];
@@ -147,6 +163,12 @@ function extractTopFixes(topFixes) {
 }
 
 export default async function handler(req, res) {
+  setCorsHeaders(req, res);
+
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
   if (req.method !== "GET") {
     return res.status(405).json({ success: false, error: "Method not allowed" });
   }
