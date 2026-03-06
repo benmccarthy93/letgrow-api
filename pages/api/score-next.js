@@ -13,7 +13,6 @@ export default async function handler(req, res) {
   const { job_id, submission_id } = req.body || {};
 
   try {
-    // 1) Find the target submission
     let submissionQuery = supabase
       .from("listing_submissions")
       .select("*")
@@ -44,7 +43,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // 2) Load latest fetch row for this submission
     const { data: fetchRows, error: fetchError } = await supabase
       .from("listing_fetches")
       .select("*")
@@ -67,14 +65,9 @@ export default async function handler(req, res) {
     }
 
     const raw = normaliseRawPayload(fetchRow.raw_response);
-
-    // 3) Extract listing data from varied HasData payload shapes
     const listing = extractListingSignals(raw);
-
-    // 4) Score the listing with stricter rules
     const scored = scoreListingStrict(listing);
 
-    // 5) Write score row
     const insertPayload = {
       submission_id: submission.id,
       scoring_version: "v3",
@@ -102,7 +95,6 @@ export default async function handler(req, res) {
       throw new Error(`Failed to insert score row: ${insertError.message}`);
     }
 
-    // 6) Mark submission complete
     const { error: updateError } = await supabase
       .from("listing_submissions")
       .update({
@@ -281,7 +273,6 @@ function scoreListingStrict(listing) {
 
   const penalties = [];
 
-  // Global penalties
   if (photoInfo.count < 10) penalties.push({ key: "very_sparse_photos", value: 11 });
   else if (photoInfo.count < 15) penalties.push({ key: "sparse_photos", value: 7 });
   else if (photoInfo.count < 20) penalties.push({ key: "suboptimal_photos", value: 4 });
@@ -315,7 +306,6 @@ function scoreListingStrict(listing) {
   const penaltyTotal = penalties.reduce((sum, p) => sum + p.value, 0);
   overall -= penaltyTotal;
 
-  // Caps: one weak area should drag the whole listing down
   let overallCap = 100;
 
   if (photo_score < 12) overallCap = Math.min(overallCap, 78);
@@ -544,7 +534,6 @@ function analysePhotos(photos) {
   const fillerLikely = count >= 44;
   const repetitionLikely = detectRepetition(photos);
 
-  // Count-based baseline exactly in line with your stricter ranges
   let score = 0;
 
   if (count <= 4) score = 0;
@@ -559,7 +548,6 @@ function analysePhotos(photos) {
   else if (count <= 60) score = 16;
   else score = 14;
 
-  // Add points
   if (bedroomCoverage) score += 1;
   if (bathroomCoverage) score += 1;
   if (kitchenCoverage) score += 1;
@@ -567,7 +555,6 @@ function analysePhotos(photos) {
   if (exteriorCoverage) score += 1;
   if (strongFirstImageSet) score += 1;
 
-  // Subtract points
   if (count < 20) score -= 2;
   if (likelyMissingRooms) score -= 2;
   if (repetitionLikely) score -= 2;
@@ -575,7 +562,6 @@ function analysePhotos(photos) {
   if (practicalShotsMissing) score -= 1;
   if (fillerLikely) score -= 2;
 
-  // Keep sparse photo sets from looking strong even with decent variety
   if (count <= 15) score = Math.min(score, 12);
   if (count <= 11) score = Math.min(score, 8);
 
@@ -910,32 +896,101 @@ function extractRating(merged) {
     merged?.review_score,
     merged?.reviews?.rating,
     merged?.reviews?.average_rating,
+    merged?.reviewStats?.rating,
+    merged?.reviewStats?.averageRating,
+    merged?.listing?.rating,
+    merged?.listing?.star_rating,
   ];
 
-  for (const value of candidates) {
-    const n = Number(value);
-    if (!Number.isNaN(n) && n > 0) return n;
+  const numericCandidates = candidates
+    .map((value) => Number(value))
+    .filter((n) => !Number.isNaN(n) && n > 0 && n <= 5);
+
+  if (numericCandidates.length > 0) {
+    return Math.max(...numericCandidates);
+  }
+
+  const recursiveMatches = findNumericValuesByKey(merged, [
+    "rating",
+    "star_rating",
+    "avg_rating",
+    "average_rating",
+    "review_score",
+  ]).filter((n) => n > 0 && n <= 5);
+
+  if (recursiveMatches.length > 0) {
+    return Math.max(...recursiveMatches);
   }
 
   return null;
 }
 
 function extractReviewsCount(merged) {
-  const candidates = [
+  const directCandidates = [
     merged?.reviews_count,
     merged?.number_of_reviews,
     merged?.reviewsCount,
     merged?.reviews?.count,
     merged?.review_count,
     merged?.visible_review_count,
+    merged?.reviewStats?.count,
+    merged?.reviewStats?.totalCount,
+    merged?.reviews?.totalCount,
+    merged?.listing?.reviews_count,
+    merged?.listing?.number_of_reviews,
   ];
 
-  for (const value of candidates) {
-    const n = Number(value);
-    if (!Number.isNaN(n) && n >= 0) return n;
+  const numericDirect = directCandidates
+    .map((value) => Number(value))
+    .filter((n) => Number.isInteger(n) && n >= 0);
+
+  const recursiveMatches = findNumericValuesByKey(merged, [
+    "reviews_count",
+    "number_of_reviews",
+    "review_count",
+    "reviewsCount",
+    "visible_review_count",
+    "total_reviews",
+    "reviewCount",
+    "reviewcount",
+  ]).filter((n) => Number.isInteger(n) && n >= 0);
+
+  const all = [...numericDirect, ...recursiveMatches];
+
+  const positive = all.filter((n) => n > 0);
+  if (positive.length > 0) {
+    return Math.max(...positive);
   }
 
   return 0;
+}
+
+function findNumericValuesByKey(obj, targetKeys) {
+  const found = [];
+  const normalisedTargets = new Set(targetKeys.map((k) => String(k).toLowerCase()));
+
+  function walk(value) {
+    if (Array.isArray(value)) {
+      for (const item of value) walk(item);
+      return;
+    }
+
+    if (!value || typeof value !== "object") return;
+
+    for (const [key, child] of Object.entries(value)) {
+      const lowerKey = String(key).toLowerCase();
+
+      if (normalisedTargets.has(lowerKey)) {
+        const n = Number(child);
+        if (!Number.isNaN(n)) found.push(n);
+      }
+
+      walk(child);
+    }
+  }
+
+  walk(obj);
+  return found;
 }
 
 function extractBoolean(obj, keys) {
