@@ -1,12 +1,12 @@
 // /pages/api/submit.js
 import { createClient } from "@supabase/supabase-js";
+import crypto from "crypto";
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// Optional: allow multiple origins (comma-separated) OR single origin
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN;
-const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS; // e.g. "https://letgrow.co.uk,https://www.letgrow.co.uk"
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
@@ -28,18 +28,42 @@ function isOriginAllowed(origin) {
   return allowed.includes(origin);
 }
 
+function generateJobId() {
+  return `lg_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+}
+
+function normaliseUrl(url) {
+  try {
+    const parsed = new URL(String(url).trim());
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return String(url).trim();
+  }
+}
+
+function extractAirbnbListingId(url) {
+  const value = String(url).trim();
+
+  const match = value.match(/airbnb\.[^/]+\/rooms\/(\d+)/i);
+  if (match && match[1]) {
+    return match[1];
+  }
+
+  return null;
+}
+
 export default async function handler(req, res) {
   const origin = req.headers.origin;
 
-  // Basic CORS
   if (origin && isOriginAllowed(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   }
+
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  // Preflight
   if (req.method === "OPTIONS") {
     return res.status(204).end();
   }
@@ -48,7 +72,6 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // Reject if origin is present but not allowed (Framer/web browsers will send Origin)
   if (origin && !isOriginAllowed(origin)) {
     return res.status(403).json({ error: "Forbidden origin" });
   }
@@ -63,67 +86,49 @@ export default async function handler(req, res) {
       email,
       listing_url,
       marketing_consent,
-      // tier may arrive from some forms, but we DO NOT insert it into leads (since you removed the column)
-      tier,
     } = req.body || {};
 
-    // Minimal validation
     if (!name || !email || !listing_url) {
       return res.status(400).json({ error: "Missing required fields: name, email, listing_url" });
     }
 
-    // Normalise marketing consent to boolean
-    const marketingConsentBool = !!marketing_consent;
+    const trimmedName = String(name).trim();
+    const trimmedEmail = String(email).trim().toLowerCase();
+    const trimmedListingUrl = String(listing_url).trim();
 
-    // 1) Insert lead (NO tier column)
-    const { data: lead, error: leadError } = await supabase
-      .from("leads")
-      .insert([
-        {
-          name: String(name).trim(),
-          email: String(email).trim().toLowerCase(),
-          listing_url: String(listing_url).trim(),
-          marketing_consent: marketingConsentBool,
-        },
-      ])
-      .select()
-      .single();
+    const jobId = generateJobId();
+    const normalisedUrl = normaliseUrl(trimmedListingUrl);
+    const airbnbListingId = extractAirbnbListingId(trimmedListingUrl);
 
-    if (leadError) {
-      console.error("Lead insert error:", leadError);
-      return res.status(500).json({ error: leadError.message || "Failed to create lead" });
-    }
-
-    // 2) Create job linked to lead
-    // You CAN store tier on jobs (recommended), even if you removed it from leads.
-    const jobPayload = {
-      lead_id: lead.id,
-      status: "queued",
+    const submissionPayload = {
+      full_name: trimmedName,
+      email: trimmedEmail,
+      airbnb_url: trimmedListingUrl,
+      tier: "free",
+      status: "pending",
+      status_message: "Submission received",
+      source: "website",
+      job_id: jobId,
+      normalised_url: normalisedUrl,
+      airbnb_listing_id: airbnbListingId,
     };
 
-    // If your jobs table has a tier column and you want it:
-    if (typeof tier === "string" && tier.trim().length > 0) {
-      jobPayload.tier = tier.trim();
-    }
-
-    const { data: job, error: jobError } = await supabase
-      .from("jobs")
-      .insert([jobPayload])
+    const { data: submission, error: submissionError } = await supabase
+      .from("listing_submissions")
+      .insert([submissionPayload])
       .select()
       .single();
 
-    if (jobError) {
-      console.error("Job insert error:", jobError);
-
-      // Optional cleanup: if job creation fails, you might want to delete the lead to avoid orphan leads.
-      // Commented out by default.
-      // await supabase.from("leads").delete().eq("id", lead.id);
-
-      return res.status(500).json({ error: jobError.message || "Failed to create job" });
+    if (submissionError) {
+      console.error("Submission insert error:", submissionError);
+      return res.status(500).json({ error: submissionError.message || "Failed to create submission" });
     }
 
-    // 3) Return job_id
-    return res.status(200).json({ job_id: job.id });
+    return res.status(200).json({
+      success: true,
+      job_id: submission.job_id,
+      submission_id: submission.id,
+    });
   } catch (e) {
     console.error("Unhandled error:", e);
     return res.status(500).json({ error: "Server error" });
