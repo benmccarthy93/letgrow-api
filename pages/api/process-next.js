@@ -53,6 +53,402 @@ function isStaleProcessing(createdAt) {
   return Date.now() - createdTime > staleMs;
 }
 
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function asObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function asString(value) {
+  if (value === null || value === undefined) return null;
+  const stringValue = String(value).trim();
+  return stringValue.length > 0 ? stringValue : null;
+}
+
+function asNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function asInteger(value) {
+  const numberValue = asNumber(value);
+  return numberValue === null ? null : Math.round(numberValue);
+}
+
+function pickFirst(...values) {
+  for (const value of values) {
+    if (value !== null && value !== undefined && value !== "") {
+      return value;
+    }
+  }
+  return null;
+}
+
+function normaliseText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function arrayContainsFeature(items, patterns) {
+  const normalisedPatterns = patterns.map((pattern) => normaliseText(pattern));
+
+  return items.some((item) => {
+    const candidate =
+      normaliseText(item?.title) ||
+      normaliseText(item?.name) ||
+      normaliseText(item?.label) ||
+      normaliseText(item);
+
+    if (!candidate) return false;
+
+    return normalisedPatterns.some((pattern) => candidate.includes(pattern));
+  });
+}
+
+function extractAmenities(raw) {
+  const amenitiesCandidates = [
+    raw?.amenities,
+    raw?.listing?.amenities,
+    raw?.data?.amenities,
+    raw?.pdpSections?.amenities,
+    raw?.metadata?.amenities,
+  ];
+
+  for (const candidate of amenitiesCandidates) {
+    if (Array.isArray(candidate)) {
+      return candidate.map((item) => {
+        if (typeof item === "string") {
+          return { name: item };
+        }
+
+        if (item && typeof item === "object") {
+          return {
+            name: pickFirst(item.name, item.title, item.label, item.value),
+            available:
+              item.available === undefined ? true : Boolean(item.available),
+            raw: item,
+          };
+        }
+
+        return null;
+      }).filter(Boolean);
+    }
+  }
+
+  return [];
+}
+
+function extractPhotos(raw) {
+  const photoCandidates = [
+    raw?.images,
+    raw?.photos,
+    raw?.listing?.photos,
+    raw?.listing?.images,
+    raw?.data?.photos,
+    raw?.data?.images,
+    raw?.pictureUrls,
+  ];
+
+  for (const candidate of photoCandidates) {
+    if (Array.isArray(candidate)) {
+      return candidate.map((item) => {
+        if (typeof item === "string") {
+          return { url: item };
+        }
+
+        if (item && typeof item === "object") {
+          return {
+            url: pickFirst(item.url, item.picture, item.src, item.imageUrl, item.large),
+            caption: pickFirst(item.caption, item.title, item.alt),
+            raw: item,
+          };
+        }
+
+        return null;
+      }).filter(Boolean);
+    }
+  }
+
+  return [];
+}
+
+function extractReviewExcerpts(raw) {
+  const reviewCandidates = [
+    raw?.reviews,
+    raw?.listing?.reviews,
+    raw?.data?.reviews,
+    raw?.reviewSummary?.reviews,
+  ];
+
+  for (const candidate of reviewCandidates) {
+    if (Array.isArray(candidate)) {
+      return candidate.slice(0, 10).map((item) => {
+        if (typeof item === "string") {
+          return { text: item };
+        }
+
+        if (item && typeof item === "object") {
+          return {
+            text: pickFirst(item.text, item.comment, item.body, item.review),
+            rating: asNumber(pickFirst(item.rating, item.score)),
+            created_at: pickFirst(item.createdAt, item.date),
+            raw: item,
+          };
+        }
+
+        return null;
+      }).filter(Boolean);
+    }
+  }
+
+  return [];
+}
+
+function extractHouseRules(raw) {
+  const rulesCandidates = [
+    raw?.houseRules,
+    raw?.listing?.houseRules,
+    raw?.data?.houseRules,
+    raw?.policies?.houseRules,
+  ];
+
+  for (const candidate of rulesCandidates) {
+    if (Array.isArray(candidate)) {
+      return candidate.filter(Boolean);
+    }
+
+    if (candidate && typeof candidate === "object") {
+      return [candidate];
+    }
+  }
+
+  return [];
+}
+
+function buildListingSnapshot(submission, raw) {
+  const listing = asObject(
+    pickFirst(raw?.listing, raw?.data?.listing, raw?.data, raw)
+  );
+
+  const amenities = extractAmenities(raw);
+  const photos = extractPhotos(raw);
+  const reviewExcerpts = extractReviewExcerpts(raw);
+  const houseRules = extractHouseRules(raw);
+
+  const title = asString(
+    pickFirst(
+      listing.title,
+      raw?.title,
+      raw?.name,
+      raw?.listingTitle,
+      raw?.seoTitle
+    )
+  );
+
+  const description = asString(
+    pickFirst(
+      listing.description,
+      raw?.description,
+      raw?.summary,
+      raw?.listingDescription
+    )
+  );
+
+  const roomType = asString(
+    pickFirst(
+      listing.roomType,
+      raw?.roomType,
+      raw?.room_type
+    )
+  );
+
+  const propertyType = asString(
+    pickFirst(
+      listing.propertyType,
+      raw?.propertyType,
+      raw?.property_type
+    )
+  );
+
+  const personCapacity = asInteger(
+    pickFirst(
+      listing.personCapacity,
+      listing.capacity,
+      raw?.personCapacity,
+      raw?.capacity,
+      raw?.guests,
+      raw?.guestCapacity
+    )
+  );
+
+  const bedroomCount = asNumber(
+    pickFirst(
+      listing.bedrooms,
+      raw?.bedrooms,
+      raw?.bedroomCount
+    )
+  );
+
+  const bedCount = asNumber(
+    pickFirst(
+      listing.beds,
+      raw?.beds,
+      raw?.bedCount
+    )
+  );
+
+  const bathroomCount = asNumber(
+    pickFirst(
+      listing.bathrooms,
+      raw?.baths,
+      raw?.bathrooms,
+      raw?.bathroomCount
+    )
+  );
+
+  const rating = asNumber(
+    pickFirst(
+      listing.rating,
+      raw?.rating,
+      raw?.starRating,
+      raw?.avgRating
+    )
+  );
+
+  const reviewCount = asInteger(
+    pickFirst(
+      listing.reviewCount,
+      raw?.reviewCount,
+      raw?.reviewsCount,
+      raw?.numberOfReviews
+    )
+  );
+
+  const superhost = (() => {
+    const value = pickFirst(
+      listing.superhost,
+      raw?.superhost,
+      raw?.isSuperhost,
+      raw?.host?.isSuperhost
+    );
+
+    if (value === null || value === undefined) return null;
+    return Boolean(value);
+  })();
+
+  const locationText = asString(
+    pickFirst(
+      raw?.location,
+      raw?.city,
+      raw?.area,
+      raw?.publicAddress,
+      raw?.listing?.location
+    )
+  );
+
+  const priceText = asString(
+    pickFirst(
+      raw?.price,
+      raw?.priceText,
+      raw?.pricing?.price,
+      raw?.pricing?.priceText,
+      raw?.nightlyPrice
+    )
+  );
+
+  const cleaningFeeText = asString(
+    pickFirst(
+      raw?.cleaningFee,
+      raw?.pricing?.cleaningFee,
+      raw?.pricing?.cleaningFeeText
+    )
+  );
+
+  const extraFeesJson = pickFirst(
+    raw?.pricing?.extraFees,
+    raw?.extraFees,
+    raw?.fees,
+    []
+  );
+
+  const checkInText = asString(
+    pickFirst(
+      raw?.checkIn,
+      raw?.checkInTime,
+      raw?.policies?.checkIn
+    )
+  );
+
+  const checkOutText = asString(
+    pickFirst(
+      raw?.checkOut,
+      raw?.checkOutTime,
+      raw?.policies?.checkOut
+    )
+  );
+
+  return {
+    submission_id: submission.id,
+    job_id: submission.job_id,
+    airbnb_listing_id: submission.airbnb_listing_id || null,
+    normalised_url: submission.normalised_url || null,
+    snapshot_version: "v1",
+    title,
+    description,
+    room_type: roomType,
+    property_type: propertyType,
+    person_capacity: personCapacity,
+    bedroom_count: bedroomCount,
+    bed_count: bedCount,
+    bathroom_count: bathroomCount,
+    amenities_json: amenities,
+    amenities_count: amenities.length,
+    photo_count: photos.length,
+    photos_json: photos,
+    rating,
+    review_count: reviewCount,
+    reviews_excerpt_json: reviewExcerpts,
+    superhost,
+    location_text: locationText,
+    price_text: priceText,
+    cleaning_fee_text: cleaningFeeText,
+    extra_fees_json: extraFeesJson,
+    check_in_text: checkInText,
+    check_out_text: checkOutText,
+    house_rules_json: houseRules,
+    title_length: title ? title.length : 0,
+    description_length: description ? description.length : 0,
+    has_wifi: arrayContainsFeature(amenities, ["wifi", "wi fi"]),
+    has_parking: arrayContainsFeature(amenities, ["parking", "free parking"]),
+    has_workspace: arrayContainsFeature(amenities, ["workspace", "dedicated workspace", "desk"]),
+    has_self_check_in: arrayContainsFeature(amenities, ["self check in", "self-check-in", "lockbox", "keypad"]),
+    has_air_con: arrayContainsFeature(amenities, ["air conditioning", "aircon", "ac"]),
+    has_washer: arrayContainsFeature(amenities, ["washer", "washing machine"]),
+    has_dryer: arrayContainsFeature(amenities, ["dryer", "tumble dryer"]),
+    has_pet_allowed: arrayContainsFeature(amenities, ["pets allowed", "pet friendly", "pets"]),
+    has_hot_tub: arrayContainsFeature(amenities, ["hot tub", "jacuzzi"]),
+    has_pool: arrayContainsFeature(amenities, ["pool", "swimming pool"]),
+  };
+}
+
+async function upsertSnapshot(snapshotPayload) {
+  const { error } = await supabase
+    .from("listing_snapshots")
+    .upsert([snapshotPayload], {
+      onConflict: "submission_id",
+    });
+
+  if (error) {
+    throw new Error(error.message || "Failed to store listing snapshot");
+  }
+}
+
 async function markSubmission(submissionId, status, statusMessage) {
   await supabase
     .from("listing_submissions")
@@ -368,7 +764,10 @@ export default async function handler(req, res) {
       });
     }
 
-    if (submission.status === "processing" && !isStaleProcessing(submission.created_at)) {
+    if (
+      submission.status === "processing" &&
+      !isStaleProcessing(submission.created_at)
+    ) {
       return res.status(200).json({
         success: true,
         submission_id: submission.id,
@@ -456,6 +855,28 @@ export default async function handler(req, res) {
           error: "Failed to store fetch row",
         });
       }
+
+      try {
+        const snapshotPayload = buildListingSnapshot(
+          submission,
+          enrichedRawResponse
+        );
+
+        await upsertSnapshot(snapshotPayload);
+      } catch (snapshotError) {
+        console.error("Snapshot storage error:", snapshotError);
+
+        await markSubmission(
+          submission.id,
+          "failed",
+          "Fetched listing data but failed to store snapshot"
+        );
+
+        return res.status(500).json({
+          success: false,
+          error: "Failed to store listing snapshot",
+        });
+      }
     }
 
     await markSubmission(
@@ -510,7 +931,9 @@ export default async function handler(req, res) {
       submission_id: submission.id,
       job_id: submission.job_id,
       processed_by: jobId || submissionId ? "targeted" : "oldest_pending",
-      fetch_status: existingFetch?.fetch_status === "success" ? "reused" : "success",
+      fetch_status:
+        existingFetch?.fetch_status === "success" ? "reused" : "success",
+      snapshot_stored: true,
       score_triggered: true,
       score_response: scoreTrigger.data,
     });
