@@ -8,13 +8,19 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN;
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS;
 
+const APP_BASE_URL = process.env.APP_BASE_URL;
+const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET;
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 
 function getAllowedOrigins() {
   if (ALLOWED_ORIGINS && ALLOWED_ORIGINS.trim().length > 0) {
-    return ALLOWED_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean);
+    return ALLOWED_ORIGINS
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
   }
 
   if (ALLOWED_ORIGIN && ALLOWED_ORIGIN.trim().length > 0) {
@@ -35,7 +41,7 @@ function generateJobId() {
 }
 
 function extractAirbnbListingId(url) {
-  const value = String(url).trim();
+  const value = String(url || "").trim();
   const match = value.match(/airbnb\.[^/]+\/rooms\/(\d+)/i);
 
   if (match && match[1]) {
@@ -72,6 +78,30 @@ function parseMarketingConsent(value) {
   );
 }
 
+function buildProcessNextUrl() {
+  if (!APP_BASE_URL || !APP_BASE_URL.trim()) {
+    return null;
+  }
+
+  return `${APP_BASE_URL.replace(/\/+$/, "")}/api/process-next`;
+}
+
+async function updateSubmissionFailure(submissionId, message) {
+  if (!submissionId) return;
+
+  try {
+    await supabase
+      .from("listing_submissions")
+      .update({
+        status: "failed",
+        status_message: message,
+      })
+      .eq("id", submissionId);
+  } catch (updateError) {
+    console.error("Failed to update submission status after trigger error:", updateError);
+  }
+}
+
 export default async function handler(req, res) {
   const origin = req.headers.origin;
 
@@ -97,22 +127,35 @@ export default async function handler(req, res) {
 
   try {
     if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-      return res
-        .status(500)
-        .json({ error: "Server misconfigured: missing Supabase env vars" });
+      return res.status(500).json({
+        error: "Server misconfigured: missing Supabase env vars",
+      });
+    }
+
+    if (!APP_BASE_URL || !INTERNAL_API_SECRET) {
+      return res.status(500).json({
+        error: "Server misconfigured: missing processing env vars",
+      });
     }
 
     const { name, email, listing_url, marketing_consent } = req.body || {};
 
     if (!name || !email || !listing_url) {
-      return res
-        .status(400)
-        .json({ error: "Missing required fields: name, email, listing_url" });
+      return res.status(400).json({
+        error: "Missing required fields: name, email, listing_url",
+      });
     }
 
     const trimmedName = String(name).trim();
     const trimmedEmail = String(email).trim().toLowerCase();
     const trimmedListingUrl = String(listing_url).trim();
+
+    if (!trimmedName || !trimmedEmail || !trimmedListingUrl) {
+      return res.status(400).json({
+        error: "Name, email and listing URL are required",
+      });
+    }
+
     const airbnbListingId = extractAirbnbListingId(trimmedListingUrl);
 
     if (!airbnbListingId) {
@@ -147,15 +190,85 @@ export default async function handler(req, res) {
 
     if (submissionError) {
       console.error("Submission insert error:", submissionError);
-      return res
-        .status(500)
-        .json({ error: submissionError.message || "Failed to create submission" });
+      return res.status(500).json({
+        error: submissionError.message || "Failed to create submission",
+      });
+    }
+
+    const processNextUrl = buildProcessNextUrl();
+
+    if (!processNextUrl) {
+      await updateSubmissionFailure(
+        submission.id,
+        "Processing trigger URL is not configured"
+      );
+
+      return res.status(500).json({
+        error: "Processing trigger URL is not configured",
+        job_id: submission.job_id,
+        submission_id: submission.id,
+      });
+    }
+
+    let processResponse;
+
+    try {
+      processResponse = await fetch(processNextUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-internal-secret": INTERNAL_API_SECRET,
+        },
+        body: JSON.stringify({
+          job_id: submission.job_id,
+        }),
+      });
+    } catch (processRequestError) {
+      console.error("Process trigger request failed:", processRequestError);
+
+      await updateSubmissionFailure(
+        submission.id,
+        "Automatic processing trigger request failed"
+      );
+
+      return res.status(500).json({
+        error: "Automatic processing trigger request failed",
+        job_id: submission.job_id,
+        submission_id: submission.id,
+      });
+    }
+
+    let processResult = null;
+
+    try {
+      processResult = await processResponse.json();
+    } catch {
+      processResult = null;
+    }
+
+    if (!processResponse.ok) {
+      console.error("Process trigger responded with error:", {
+        status: processResponse.status,
+        body: processResult,
+      });
+
+      await updateSubmissionFailure(
+        submission.id,
+        processResult?.error || "Automatic processing trigger failed"
+      );
+
+      return res.status(500).json({
+        error: processResult?.error || "Automatic processing trigger failed",
+        job_id: submission.job_id,
+        submission_id: submission.id,
+      });
     }
 
     return res.status(200).json({
       success: true,
       job_id: submission.job_id,
       submission_id: submission.id,
+      processing_started: true,
     });
   } catch (e) {
     console.error("Unhandled error:", e);
