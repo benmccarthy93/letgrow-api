@@ -1,329 +1,525 @@
 // /pages/api/process-next.js
-import { createClient } from "@supabase/supabase-js"
+import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL = process.env.SUPABASE_URL
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
-const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET
-const HASDATA_API_KEY = process.env.HASDATA_API_KEY
-const HASDATA_PROPERTY_API_URL = process.env.HASDATA_PROPERTY_API_URL
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET;
+const HASDATA_API_KEY = process.env.HASDATA_API_KEY;
+const HASDATA_PROPERTY_API_URL = process.env.HASDATA_PROPERTY_API_URL;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-    auth: { persistSession: false },
-})
+  auth: { persistSession: false },
+});
+
+const STALE_PROCESSING_MINUTES = 15;
 
 function getInputValue(value) {
-    if (Array.isArray(value)) return value[0]
-    return value
+  if (Array.isArray(value)) return value[0];
+  return value;
 }
 
 function truncate(value, max = 250) {
-    return String(value || "").slice(0, max)
+  return String(value || "").slice(0, max);
 }
 
 function getBaseUrl(req) {
-    if (process.env.APP_BASE_URL) return process.env.APP_BASE_URL
-    if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`
+  if (process.env.APP_BASE_URL) return process.env.APP_BASE_URL;
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
 
-    const host = req.headers.host
-    const protocol =
-        host && host.includes("localhost") ? "http" : "https"
+  const host = req.headers.host;
+  const protocol = host && host.includes("localhost") ? "http" : "https";
 
-    return `${protocol}://${host}`
+  return `${protocol}://${host}`;
 }
 
 function isAuthorised(req) {
-    const headerSecret =
-        req.headers["x-internal-secret"] ||
-        req.headers["x-api-internal-secret"]
+  const headerSecret =
+    req.headers["x-internal-secret"] ||
+    req.headers["x-api-internal-secret"];
 
-    return (
-        INTERNAL_API_SECRET &&
-        String(headerSecret || "") === String(INTERNAL_API_SECRET)
-    )
+  return (
+    INTERNAL_API_SECRET &&
+    String(headerSecret || "") === String(INTERNAL_API_SECRET)
+  );
+}
+
+function isStaleProcessing(createdAt) {
+  if (!createdAt) return true;
+
+  const createdTime = new Date(createdAt).getTime();
+  if (Number.isNaN(createdTime)) return true;
+
+  const staleMs = STALE_PROCESSING_MINUTES * 60 * 1000;
+  return Date.now() - createdTime > staleMs;
 }
 
 async function markSubmission(submissionId, status, statusMessage) {
-    await supabase
-        .from("listing_submissions")
-        .update({
-            status,
-            status_message: truncate(statusMessage),
-        })
-        .eq("id", submissionId)
+  await supabase
+    .from("listing_submissions")
+    .update({
+      status,
+      status_message: truncate(statusMessage),
+    })
+    .eq("id", submissionId);
 }
 
 async function insertFetchRow({
-    submissionId,
-    fetchStatus,
-    provider,
-    requestUrl,
-    rawResponse,
+  submissionId,
+  fetchStatus,
+  provider,
+  requestUrl,
+  rawResponse,
 }) {
-    return supabase.from("listing_fetches").insert([
-        {
-            submission_id: submissionId,
-            fetch_status: fetchStatus,
-            provider,
-            request_url: requestUrl,
-            raw_response: rawResponse,
-            created_at: new Date().toISOString(),
-        },
-    ])
+  return supabase.from("listing_fetches").insert([
+    {
+      submission_id: submissionId,
+      fetch_status: fetchStatus,
+      provider,
+      request_url: requestUrl,
+      raw_response: rawResponse,
+      created_at: new Date().toISOString(),
+    },
+  ]);
 }
 
 async function fetchHasDataProperty(normalisedUrl) {
-    if (!HASDATA_API_KEY) {
-        throw new Error("Missing HASDATA_API_KEY env var")
-    }
+  if (!HASDATA_API_KEY) {
+    throw new Error("Missing HASDATA_API_KEY env var");
+  }
 
-    if (!HASDATA_PROPERTY_API_URL) {
-        throw new Error("Missing HASDATA_PROPERTY_API_URL env var")
-    }
+  if (!HASDATA_PROPERTY_API_URL) {
+    throw new Error("Missing HASDATA_PROPERTY_API_URL env var");
+  }
 
-    const requestUrl = `${HASDATA_PROPERTY_API_URL}?${new URLSearchParams({
-        url: normalisedUrl,
-    }).toString()}`
+  const requestUrl = `${HASDATA_PROPERTY_API_URL}?${new URLSearchParams({
+    url: normalisedUrl,
+  }).toString()}`;
 
-    const response = await fetch(requestUrl, {
-        method: "GET",
-        headers: {
-            "Accept": "application/json",
-            "Authorization": `Bearer ${HASDATA_API_KEY}`,
-            "x-api-key": HASDATA_API_KEY,
-        },
-    })
+  const response = await fetch(requestUrl, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${HASDATA_API_KEY}`,
+      "x-api-key": HASDATA_API_KEY,
+    },
+  });
 
-    let raw
-    try {
-        raw = await response.json()
-    } catch {
-        raw = { error: "Non-JSON response from HasData" }
-    }
+  let raw;
+  try {
+    raw = await response.json();
+  } catch {
+    raw = { error: "Non-JSON response from HasData" };
+  }
 
-    return {
-        ok: response.ok,
-        status: response.status,
-        requestUrl,
-        raw,
-    }
+  return {
+    ok: response.ok,
+    status: response.status,
+    requestUrl,
+    raw,
+  };
 }
 
 async function triggerScoreNext(req, jobId) {
-    const baseUrl = getBaseUrl(req)
+  const baseUrl = getBaseUrl(req);
 
-    const response = await fetch(`${baseUrl}/api/score-next`, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "x-internal-secret": INTERNAL_API_SECRET,
-        },
-        body: JSON.stringify({
-            job_id: jobId,
-        }),
-    })
+  const response = await fetch(`${baseUrl}/api/score-next`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-internal-secret": INTERNAL_API_SECRET,
+    },
+    body: JSON.stringify({
+      job_id: jobId,
+    }),
+  });
 
-    let data = null
-    try {
-        data = await response.json()
-    } catch {
-        data = null
-    }
+  let data = null;
+  try {
+    data = await response.json();
+  } catch {
+    data = null;
+  }
 
+  return {
+    ok: response.ok,
+    status: response.status,
+    data,
+  };
+}
+
+async function getLatestFetchForSubmission(submissionId) {
+  const { data, error } = await supabase
+    .from("listing_fetches")
+    .select("*")
+    .eq("submission_id", submissionId)
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (error) {
+    throw new Error(error.message || "Failed to fetch existing fetch rows");
+  }
+
+  return Array.isArray(data) && data.length > 0 ? data[0] : null;
+}
+
+async function getLatestScoreForSubmission(submissionId) {
+  const { data, error } = await supabase
+    .from("listing_scores")
+    .select("*")
+    .eq("submission_id", submissionId)
+    .order("scored_at", { ascending: false })
+    .limit(1);
+
+  if (error) {
+    throw new Error(error.message || "Failed to fetch existing score rows");
+  }
+
+  return Array.isArray(data) && data.length > 0 ? data[0] : null;
+}
+
+async function getListingHistorySignals(submission) {
+  const listingId = submission.airbnb_listing_id || null;
+  const normalisedUrl = submission.normalised_url || null;
+
+  if (!listingId && !normalisedUrl) {
     return {
-        ok: response.ok,
-        status: response.status,
-        data,
+      previous_submission_count: 0,
+      latest_previous_submission_id: null,
+      latest_previous_job_id: null,
+      latest_previous_score: null,
+    };
+  }
+
+  let query = supabase
+    .from("listing_submissions")
+    .select("id, job_id, created_at, airbnb_listing_id, normalised_url")
+    .neq("id", submission.id)
+    .order("created_at", { ascending: false });
+
+  if (listingId) {
+    query = query.eq("airbnb_listing_id", listingId);
+  } else {
+    query = query.eq("normalised_url", normalisedUrl);
+  }
+
+  const { data: previousSubmissions, error: previousSubmissionsError } =
+    await query;
+
+  if (previousSubmissionsError) {
+    throw new Error(
+      previousSubmissionsError.message ||
+        "Failed to fetch previous submissions for this listing"
+    );
+  }
+
+  const previousCount = Array.isArray(previousSubmissions)
+    ? previousSubmissions.length
+    : 0;
+
+  const latestPreviousSubmission =
+    previousCount > 0 ? previousSubmissions[0] : null;
+
+  let latestPreviousScore = null;
+
+  if (latestPreviousSubmission?.id) {
+    const { data: previousScores, error: previousScoresError } = await supabase
+      .from("listing_scores")
+      .select("overall_score, score_label, scored_at, submission_id")
+      .eq("submission_id", latestPreviousSubmission.id)
+      .order("scored_at", { ascending: false })
+      .limit(1);
+
+    if (previousScoresError) {
+      throw new Error(
+        previousScoresError.message ||
+          "Failed to fetch previous score for this listing"
+      );
     }
+
+    latestPreviousScore =
+      Array.isArray(previousScores) && previousScores.length > 0
+        ? previousScores[0]
+        : null;
+  }
+
+  return {
+    previous_submission_count: previousCount,
+    latest_previous_submission_id: latestPreviousSubmission?.id || null,
+    latest_previous_job_id: latestPreviousSubmission?.job_id || null,
+    latest_previous_score: latestPreviousScore?.overall_score ?? null,
+  };
 }
 
 export default async function handler(req, res) {
-    if (req.method !== "POST") {
-        return res.status(405).json({
-            success: false,
-            error: "Method not allowed",
-        })
+  if (req.method !== "POST") {
+    return res.status(405).json({
+      success: false,
+      error: "Method not allowed",
+    });
+  }
+
+  if (!isAuthorised(req)) {
+    return res.status(401).json({
+      success: false,
+      error: "Unauthorised",
+    });
+  }
+
+  try {
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+      return res.status(500).json({
+        success: false,
+        error: "Missing Supabase env vars",
+      });
     }
 
-    if (!isAuthorised(req)) {
-        return res.status(401).json({
-            success: false,
-            error: "Unauthorised",
-        })
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const query = req.query || {};
+
+    const jobId =
+      getInputValue(body.job_id) ||
+      getInputValue(query.job_id) ||
+      null;
+
+    const submissionId =
+      getInputValue(body.submission_id) ||
+      getInputValue(query.submission_id) ||
+      null;
+
+    let submissionQuery = supabase.from("listing_submissions").select("*");
+
+    if (submissionId) {
+      submissionQuery = submissionQuery.eq("id", submissionId);
+    } else if (jobId) {
+      submissionQuery = submissionQuery.eq("job_id", jobId);
+    } else {
+      submissionQuery = submissionQuery
+        .eq("status", "pending")
+        .order("created_at", { ascending: true })
+        .limit(1);
     }
 
-    try {
-        if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-            return res.status(500).json({
-                success: false,
-                error: "Missing Supabase env vars",
-            })
-        }
+    const { data: submissionRows, error: submissionError } =
+      await submissionQuery;
 
-        const body = req.body && typeof req.body === "object" ? req.body : {}
-        const query = req.query || {}
+    if (submissionError) {
+      console.error("Submission lookup error:", submissionError);
+      return res.status(500).json({
+        success: false,
+        error: "Failed to fetch submission",
+      });
+    }
 
-        const jobId =
-            getInputValue(body.job_id) ||
-            getInputValue(query.job_id) ||
-            null
+    const submission = Array.isArray(submissionRows)
+      ? submissionRows[0]
+      : submissionRows;
 
-        const submissionId =
-            getInputValue(body.submission_id) ||
-            getInputValue(query.submission_id) ||
-            null
+    if (!submission) {
+      return res.status(404).json({
+        success: false,
+        error: "No matching submission found",
+      });
+    }
 
-        let submissionQuery = supabase
-            .from("listing_submissions")
-            .select("*")
+    if (!submission.normalised_url) {
+      await markSubmission(
+        submission.id,
+        "failed",
+        "Missing normalised_url on submission"
+      );
 
-        if (submissionId) {
-            submissionQuery = submissionQuery.eq("id", submissionId)
-        } else if (jobId) {
-            submissionQuery = submissionQuery.eq("job_id", jobId)
-        } else {
-            submissionQuery = submissionQuery
-                .eq("status", "pending")
-                .order("created_at", { ascending: true })
-                .limit(1)
-        }
+      return res.status(400).json({
+        success: false,
+        error: "Submission is missing normalised_url",
+        submission_id: submission.id,
+        job_id: submission.job_id,
+      });
+    }
 
-        const { data: submissionRows, error: submissionError } =
-            await submissionQuery
+    const existingScore = await getLatestScoreForSubmission(submission.id);
 
-        if (submissionError) {
-            console.error("Submission lookup error:", submissionError)
-            return res.status(500).json({
-                success: false,
-                error: "Failed to fetch submission",
-            })
-        }
+    if (existingScore) {
+      await markSubmission(
+        submission.id,
+        "complete",
+        "Score already exists for this submission"
+      );
 
-        const submission = Array.isArray(submissionRows)
-            ? submissionRows[0]
-            : submissionRows
+      return res.status(200).json({
+        success: true,
+        submission_id: submission.id,
+        job_id: submission.job_id,
+        processed_by: jobId || submissionId ? "targeted" : "oldest_pending",
+        skipped: true,
+        reason: "score_already_exists",
+        score_triggered: false,
+      });
+    }
 
-        if (!submission) {
-            return res.status(404).json({
-                success: false,
-                error: "No matching submission found",
-            })
-        }
+    if (submission.status === "complete") {
+      return res.status(200).json({
+        success: true,
+        submission_id: submission.id,
+        job_id: submission.job_id,
+        processed_by: jobId || submissionId ? "targeted" : "oldest_pending",
+        skipped: true,
+        reason: "submission_already_complete",
+        score_triggered: false,
+      });
+    }
 
-        if (!submission.normalised_url) {
-            await markSubmission(
-                submission.id,
-                "failed",
-                "Missing normalised_url on submission"
-            )
+    if (submission.status === "processing" && !isStaleProcessing(submission.created_at)) {
+      return res.status(200).json({
+        success: true,
+        submission_id: submission.id,
+        job_id: submission.job_id,
+        processed_by: jobId || submissionId ? "targeted" : "oldest_pending",
+        skipped: true,
+        reason: "submission_already_processing",
+        score_triggered: false,
+      });
+    }
 
-            return res.status(400).json({
-                success: false,
-                error: "Submission is missing normalised_url",
-                submission_id: submission.id,
-                job_id: submission.job_id,
-            })
-        }
+    const existingFetch = await getLatestFetchForSubmission(submission.id);
 
-        await markSubmission(
-            submission.id,
-            "processing",
-            "Fetching listing data"
-        )
+    if (!existingFetch || existingFetch.fetch_status !== "success") {
+      await markSubmission(
+        submission.id,
+        "processing",
+        "Fetching listing data"
+      );
 
-        const hasDataResult = await fetchHasDataProperty(
-            submission.normalised_url
-        )
+      const hasDataResult = await fetchHasDataProperty(submission.normalised_url);
 
-        if (!hasDataResult.ok) {
-            await insertFetchRow({
-                submissionId: submission.id,
-                fetchStatus: "failed",
-                provider: "hasdata",
-                requestUrl: hasDataResult.requestUrl,
-                rawResponse: hasDataResult.raw,
-            })
-
-            await markSubmission(
-                submission.id,
-                "failed",
-                `Fetch failed (${hasDataResult.status})`
-            )
-
-            return res.status(502).json({
-                success: false,
-                error: "HasData fetch failed",
-                submission_id: submission.id,
-                job_id: submission.job_id,
-                provider_status: hasDataResult.status,
-                raw_response: hasDataResult.raw,
-            })
-        }
-
-        const { error: fetchInsertError } = await insertFetchRow({
-            submissionId: submission.id,
-            fetchStatus: "success",
-            provider: "hasdata",
-            requestUrl: hasDataResult.requestUrl,
-            rawResponse: hasDataResult.raw,
-        })
-
-        if (fetchInsertError) {
-            console.error("Fetch row insert error:", fetchInsertError)
-
-            await markSubmission(
-                submission.id,
-                "failed",
-                "Fetched listing data but failed to store fetch row"
-            )
-
-            return res.status(500).json({
-                success: false,
-                error: "Failed to store fetch row",
-            })
-        }
+      if (!hasDataResult.ok) {
+        await insertFetchRow({
+          submissionId: submission.id,
+          fetchStatus: "failed",
+          provider: "hasdata",
+          requestUrl: hasDataResult.requestUrl,
+          rawResponse: hasDataResult.raw,
+        });
 
         await markSubmission(
-            submission.id,
-            "fetched",
-            "Listing data fetched successfully"
-        )
+          submission.id,
+          "failed",
+          `Fetch failed (${hasDataResult.status})`
+        );
 
-        const scoreTrigger = await triggerScoreNext(req, submission.job_id)
+        return res.status(502).json({
+          success: false,
+          error: "HasData fetch failed",
+          submission_id: submission.id,
+          job_id: submission.job_id,
+          provider_status: hasDataResult.status,
+          raw_response: hasDataResult.raw,
+        });
+      }
 
-        if (!scoreTrigger.ok) {
-            console.error("Score trigger failed:", scoreTrigger)
+      const historySignals = await getListingHistorySignals(submission);
 
-            await markSubmission(
-                submission.id,
-                "fetched",
-                "Fetched successfully but scoring trigger failed"
-            )
+      const enrichedRawResponse = {
+        ...hasDataResult.raw,
+        letgrow_learning_signals: {
+          submission_id: submission.id,
+          job_id: submission.job_id,
+          airbnb_listing_id: submission.airbnb_listing_id || null,
+          normalised_url: submission.normalised_url || null,
+          submitted_at: submission.created_at || null,
+          previous_submission_count: historySignals.previous_submission_count,
+          latest_previous_submission_id:
+            historySignals.latest_previous_submission_id,
+          latest_previous_job_id: historySignals.latest_previous_job_id,
+          latest_previous_score: historySignals.latest_previous_score,
+        },
+      };
 
-            return res.status(502).json({
-                success: false,
-                error: "Fetch completed but scoring trigger failed",
-                submission_id: submission.id,
-                job_id: submission.job_id,
-                score_trigger_status: scoreTrigger.status,
-                score_trigger_response: scoreTrigger.data,
-            })
-        }
+      const { error: fetchInsertError } = await insertFetchRow({
+        submissionId: submission.id,
+        fetchStatus: "success",
+        provider: "hasdata",
+        requestUrl: hasDataResult.requestUrl,
+        rawResponse: enrichedRawResponse,
+      });
 
-        return res.status(200).json({
-            success: true,
-            submission_id: submission.id,
-            job_id: submission.job_id,
-            processed_by: jobId || submissionId ? "targeted" : "oldest_pending",
-            fetch_status: "success",
-            score_triggered: true,
-            score_response: scoreTrigger.data,
-        })
-    } catch (error) {
-        console.error("Unhandled error in process-next:", error)
+      if (fetchInsertError) {
+        console.error("Fetch row insert error:", fetchInsertError);
+
+        await markSubmission(
+          submission.id,
+          "failed",
+          "Fetched listing data but failed to store fetch row"
+        );
 
         return res.status(500).json({
-            success: false,
-            error: error.message || "Server error",
-        })
+          success: false,
+          error: "Failed to store fetch row",
+        });
+      }
     }
+
+    await markSubmission(
+      submission.id,
+      "fetched",
+      "Listing data fetched successfully"
+    );
+
+    const scoreCheckAfterFetch = await getLatestScoreForSubmission(submission.id);
+
+    if (scoreCheckAfterFetch) {
+      await markSubmission(
+        submission.id,
+        "complete",
+        "Score already exists for this submission"
+      );
+
+      return res.status(200).json({
+        success: true,
+        submission_id: submission.id,
+        job_id: submission.job_id,
+        processed_by: jobId || submissionId ? "targeted" : "oldest_pending",
+        skipped: true,
+        reason: "score_already_exists_after_fetch",
+        score_triggered: false,
+      });
+    }
+
+    const scoreTrigger = await triggerScoreNext(req, submission.job_id);
+
+    if (!scoreTrigger.ok) {
+      console.error("Score trigger failed:", scoreTrigger);
+
+      await markSubmission(
+        submission.id,
+        "fetched",
+        "Fetched successfully but scoring trigger failed"
+      );
+
+      return res.status(502).json({
+        success: false,
+        error: "Fetch completed but scoring trigger failed",
+        submission_id: submission.id,
+        job_id: submission.job_id,
+        score_trigger_status: scoreTrigger.status,
+        score_trigger_response: scoreTrigger.data,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      submission_id: submission.id,
+      job_id: submission.job_id,
+      processed_by: jobId || submissionId ? "targeted" : "oldest_pending",
+      fetch_status: existingFetch?.fetch_status === "success" ? "reused" : "success",
+      score_triggered: true,
+      score_response: scoreTrigger.data,
+    });
+  } catch (error) {
+    console.error("Unhandled error in process-next:", error);
+
+    return res.status(500).json({
+      success: false,
+      error: error.message || "Server error",
+    });
+  }
 }
