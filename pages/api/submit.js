@@ -1,5 +1,6 @@
 // /pages/api/submit.js
 import { createClient } from "@supabase/supabase-js";
+import { send } from "@vercel/queue";
 import crypto from "crypto";
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -7,9 +8,6 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN;
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS;
-
-const APP_BASE_URL = process.env.APP_BASE_URL;
-const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
@@ -78,36 +76,6 @@ function parseMarketingConsent(value) {
   );
 }
 
-function buildProcessNextUrl() {
-  if (!APP_BASE_URL || !APP_BASE_URL.trim()) {
-    return null;
-  }
-
-  return `${APP_BASE_URL.replace(/\/+$/, "")}/api/process-next`;
-}
-
-async function triggerProcessingInBackground(jobId) {
-  const processNextUrl = buildProcessNextUrl();
-
-  if (!processNextUrl || !INTERNAL_API_SECRET) {
-    console.error("Background processing could not start: missing config");
-    return;
-  }
-
-  fetch(processNextUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-internal-secret": INTERNAL_API_SECRET,
-    },
-    body: JSON.stringify({
-      job_id: jobId,
-    }),
-  }).catch((error) => {
-    console.error("Background processing trigger failed:", error);
-  });
-}
-
 export default async function handler(req, res) {
   const origin = req.headers.origin;
 
@@ -135,12 +103,6 @@ export default async function handler(req, res) {
     if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
       return res.status(500).json({
         error: "Server misconfigured: missing Supabase env vars",
-      });
-    }
-
-    if (!APP_BASE_URL || !INTERNAL_API_SECRET) {
-      return res.status(500).json({
-        error: "Server misconfigured: missing processing env vars",
       });
     }
 
@@ -208,7 +170,32 @@ export default async function handler(req, res) {
       });
     }
 
-    triggerProcessingInBackground(submission.job_id);
+    try {
+      await send(
+        "listing-submissions",
+        {
+          job_id: submission.job_id,
+          submission_id: submission.id,
+        },
+        {
+          idempotencyKey: `listing-submission-${submission.job_id}`,
+        }
+      );
+    } catch (queueError) {
+      console.error("Queue publish error:", queueError);
+
+      await supabase
+        .from("listing_submissions")
+        .update({
+          status: "failed",
+          status_message: "Queue publish failed",
+        })
+        .eq("id", submission.id);
+
+      return res.status(500).json({
+        error: "Failed to queue submission for processing",
+      });
+    }
 
     return res.status(200).json({
       success: true,
