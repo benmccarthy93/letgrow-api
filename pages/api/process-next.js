@@ -53,10 +53,6 @@ function isStaleProcessing(createdAt) {
   return Date.now() - createdTime > staleMs;
 }
 
-function asArray(value) {
-  return Array.isArray(value) ? value : [];
-}
-
 function asObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
@@ -112,7 +108,10 @@ function arrayContainsFeature(items, patterns) {
 }
 
 function extractAmenities(raw) {
+  const property = asObject(raw?.property);
+
   const amenitiesCandidates = [
+    property.amenities,
     raw?.amenities,
     raw?.listing?.amenities,
     raw?.data?.amenities,
@@ -122,22 +121,27 @@ function extractAmenities(raw) {
 
   for (const candidate of amenitiesCandidates) {
     if (Array.isArray(candidate)) {
-      return candidate.map((item) => {
-        if (typeof item === "string") {
-          return { name: item };
-        }
+      return candidate
+        .map((item) => {
+          if (typeof item === "string") {
+            return { name: item, title: item, available: true };
+          }
 
-        if (item && typeof item === "object") {
-          return {
-            name: pickFirst(item.name, item.title, item.label, item.value),
-            available:
-              item.available === undefined ? true : Boolean(item.available),
-            raw: item,
-          };
-        }
+          if (item && typeof item === "object") {
+            return {
+              type: pickFirst(item.type),
+              name: pickFirst(item.name, item.title, item.label, item.value),
+              title: pickFirst(item.title, item.name, item.label, item.value),
+              description: pickFirst(item.description),
+              available:
+                item.available === undefined ? true : Boolean(item.available),
+              raw: item,
+            };
+          }
 
-        return null;
-      }).filter(Boolean);
+          return null;
+        })
+        .filter(Boolean);
     }
   }
 
@@ -145,7 +149,11 @@ function extractAmenities(raw) {
 }
 
 function extractPhotos(raw) {
+  const property = asObject(raw?.property);
+
   const photoCandidates = [
+    property.photos,
+    property.images,
     raw?.images,
     raw?.photos,
     raw?.listing?.photos,
@@ -157,21 +165,23 @@ function extractPhotos(raw) {
 
   for (const candidate of photoCandidates) {
     if (Array.isArray(candidate)) {
-      return candidate.map((item) => {
-        if (typeof item === "string") {
-          return { url: item };
-        }
+      return candidate
+        .map((item) => {
+          if (typeof item === "string") {
+            return { url: item };
+          }
 
-        if (item && typeof item === "object") {
-          return {
-            url: pickFirst(item.url, item.picture, item.src, item.imageUrl, item.large),
-            caption: pickFirst(item.caption, item.title, item.alt),
-            raw: item,
-          };
-        }
+          if (item && typeof item === "object") {
+            return {
+              url: pickFirst(item.url, item.picture, item.src, item.imageUrl, item.large),
+              caption: pickFirst(item.caption, item.title, item.alt),
+              raw: item,
+            };
+          }
 
-        return null;
-      }).filter(Boolean);
+          return null;
+        })
+        .filter(Boolean);
     }
   }
 
@@ -179,7 +189,10 @@ function extractPhotos(raw) {
 }
 
 function extractReviewExcerpts(raw) {
+  const property = asObject(raw?.property);
+
   const reviewCandidates = [
+    property.reviews,
     raw?.reviews,
     raw?.listing?.reviews,
     raw?.data?.reviews,
@@ -188,22 +201,25 @@ function extractReviewExcerpts(raw) {
 
   for (const candidate of reviewCandidates) {
     if (Array.isArray(candidate)) {
-      return candidate.slice(0, 10).map((item) => {
-        if (typeof item === "string") {
-          return { text: item };
-        }
+      return candidate
+        .slice(0, 10)
+        .map((item) => {
+          if (typeof item === "string") {
+            return { text: item };
+          }
 
-        if (item && typeof item === "object") {
-          return {
-            text: pickFirst(item.text, item.comment, item.body, item.review),
-            rating: asNumber(pickFirst(item.rating, item.score)),
-            created_at: pickFirst(item.createdAt, item.date),
-            raw: item,
-          };
-        }
+          if (item && typeof item === "object") {
+            return {
+              text: pickFirst(item.text, item.comment, item.body, item.review),
+              rating: asNumber(pickFirst(item.rating, item.score)),
+              created_at: pickFirst(item.createdAt, item.date),
+              raw: item,
+            };
+          }
 
-        return null;
-      }).filter(Boolean);
+          return null;
+        })
+        .filter(Boolean);
     }
   }
 
@@ -211,7 +227,10 @@ function extractReviewExcerpts(raw) {
 }
 
 function extractHouseRules(raw) {
+  const property = asObject(raw?.property);
+
   const rulesCandidates = [
+    property.houseRules,
     raw?.houseRules,
     raw?.listing?.houseRules,
     raw?.data?.houseRules,
@@ -232,8 +251,15 @@ function extractHouseRules(raw) {
 }
 
 function buildListingSnapshot(submission, raw) {
+  const property = asObject(raw?.property);
   const listing = asObject(
-    pickFirst(raw?.listing, raw?.data?.listing, raw?.data, raw)
+    pickFirst(
+      property,
+      raw?.listing,
+      raw?.data?.listing,
+      raw?.data,
+      raw
+    )
   );
 
   const amenities = extractAmenities(raw);
@@ -243,6 +269,7 @@ function buildListingSnapshot(submission, raw) {
 
   const title = asString(
     pickFirst(
+      property.title,
       listing.title,
       raw?.title,
       raw?.name,
@@ -253,6 +280,7 @@ function buildListingSnapshot(submission, raw) {
 
   const description = asString(
     pickFirst(
+      property.description,
       listing.description,
       raw?.description,
       raw?.summary,
@@ -262,6 +290,7 @@ function buildListingSnapshot(submission, raw) {
 
   const roomType = asString(
     pickFirst(
+      property.roomType,
       listing.roomType,
       raw?.roomType,
       raw?.room_type
@@ -270,6 +299,7 @@ function buildListingSnapshot(submission, raw) {
 
   const propertyType = asString(
     pickFirst(
+      property.propertyType,
       listing.propertyType,
       raw?.propertyType,
       raw?.property_type
@@ -278,17 +308,20 @@ function buildListingSnapshot(submission, raw) {
 
   const personCapacity = asInteger(
     pickFirst(
+      property.guestCapacity,
+      property.personCapacity,
       listing.personCapacity,
       listing.capacity,
+      raw?.guestCapacity,
       raw?.personCapacity,
       raw?.capacity,
-      raw?.guests,
-      raw?.guestCapacity
+      raw?.guests
     )
   );
 
   const bedroomCount = asNumber(
     pickFirst(
+      property.bedrooms,
       listing.bedrooms,
       raw?.bedrooms,
       raw?.bedroomCount
@@ -297,6 +330,7 @@ function buildListingSnapshot(submission, raw) {
 
   const bedCount = asNumber(
     pickFirst(
+      property.beds,
       listing.beds,
       raw?.beds,
       raw?.bedCount
@@ -305,6 +339,7 @@ function buildListingSnapshot(submission, raw) {
 
   const bathroomCount = asNumber(
     pickFirst(
+      property.bathrooms,
       listing.bathrooms,
       raw?.baths,
       raw?.bathrooms,
@@ -314,6 +349,7 @@ function buildListingSnapshot(submission, raw) {
 
   const rating = asNumber(
     pickFirst(
+      property.rating,
       listing.rating,
       raw?.rating,
       raw?.starRating,
@@ -323,6 +359,8 @@ function buildListingSnapshot(submission, raw) {
 
   const reviewCount = asInteger(
     pickFirst(
+      property.reviews,
+      property.reviewCount,
       listing.reviewCount,
       raw?.reviewCount,
       raw?.reviewsCount,
@@ -332,6 +370,7 @@ function buildListingSnapshot(submission, raw) {
 
   const superhost = (() => {
     const value = pickFirst(
+      property?.host?.isSuperhost,
       listing.superhost,
       raw?.superhost,
       raw?.isSuperhost,
@@ -344,6 +383,8 @@ function buildListingSnapshot(submission, raw) {
 
   const locationText = asString(
     pickFirst(
+      property.address,
+      raw?.address,
       raw?.location,
       raw?.city,
       raw?.area,
@@ -354,6 +395,7 @@ function buildListingSnapshot(submission, raw) {
 
   const priceText = asString(
     pickFirst(
+      property.price,
       raw?.price,
       raw?.priceText,
       raw?.pricing?.price,
@@ -364,6 +406,7 @@ function buildListingSnapshot(submission, raw) {
 
   const cleaningFeeText = asString(
     pickFirst(
+      property.cleaningFee,
       raw?.cleaningFee,
       raw?.pricing?.cleaningFee,
       raw?.pricing?.cleaningFeeText
@@ -371,6 +414,7 @@ function buildListingSnapshot(submission, raw) {
   );
 
   const extraFeesJson = pickFirst(
+    property.extraFees,
     raw?.pricing?.extraFees,
     raw?.extraFees,
     raw?.fees,
@@ -379,6 +423,7 @@ function buildListingSnapshot(submission, raw) {
 
   const checkInText = asString(
     pickFirst(
+      property.checkIn,
       raw?.checkIn,
       raw?.checkInTime,
       raw?.policies?.checkIn
@@ -387,6 +432,7 @@ function buildListingSnapshot(submission, raw) {
 
   const checkOutText = asString(
     pickFirst(
+      property.checkOut,
       raw?.checkOut,
       raw?.checkOutTime,
       raw?.policies?.checkOut
@@ -427,7 +473,7 @@ function buildListingSnapshot(submission, raw) {
     has_wifi: arrayContainsFeature(amenities, ["wifi", "wi fi"]),
     has_parking: arrayContainsFeature(amenities, ["parking", "free parking"]),
     has_workspace: arrayContainsFeature(amenities, ["workspace", "dedicated workspace", "desk"]),
-    has_self_check_in: arrayContainsFeature(amenities, ["self check in", "self-check-in", "lockbox", "keypad"]),
+    has_self_check_in: arrayContainsFeature(amenities, ["self check in", "self-check-in", "lockbox", "key"]),
     has_air_con: arrayContainsFeature(amenities, ["air conditioning", "aircon", "ac"]),
     has_washer: arrayContainsFeature(amenities, ["washer", "washing machine"]),
     has_dryer: arrayContainsFeature(amenities, ["dryer", "tumble dryer"]),
