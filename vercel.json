@@ -1,0 +1,12 @@
+{
+  "functions": {
+    "pages/api/process-listing.js": {
+      "experimentalTriggers": [
+        {
+          "type": "queue/v2beta",
+          "topic": "listing-submissions"
+        }
+      ]
+    }
+  }
+}
