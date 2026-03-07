@@ -86,20 +86,26 @@ function buildProcessNextUrl() {
   return `${APP_BASE_URL.replace(/\/+$/, "")}/api/process-next`;
 }
 
-async function updateSubmissionFailure(submissionId, message) {
-  if (!submissionId) return;
+async function triggerProcessingInBackground(jobId) {
+  const processNextUrl = buildProcessNextUrl();
 
-  try {
-    await supabase
-      .from("listing_submissions")
-      .update({
-        status: "failed",
-        status_message: message,
-      })
-      .eq("id", submissionId);
-  } catch (updateError) {
-    console.error("Failed to update submission status after trigger error:", updateError);
+  if (!processNextUrl || !INTERNAL_API_SECRET) {
+    console.error("Background processing could not start: missing config");
+    return;
   }
+
+  fetch(processNextUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-internal-secret": INTERNAL_API_SECRET,
+    },
+    body: JSON.stringify({
+      job_id: jobId,
+    }),
+  }).catch((error) => {
+    console.error("Background processing trigger failed:", error);
+  });
 }
 
 export default async function handler(req, res) {
@@ -164,9 +170,16 @@ export default async function handler(req, res) {
       });
     }
 
+    const marketingConsentBool = parseMarketingConsent(marketing_consent);
+
+    if (!marketingConsentBool) {
+      return res.status(400).json({
+        error: "Consent is required before submitting.",
+      });
+    }
+
     const jobId = generateJobId();
     const normalisedUrl = normaliseAirbnbUrl(trimmedListingUrl);
-    const marketingConsentBool = parseMarketingConsent(marketing_consent);
 
     const submissionPayload = {
       full_name: trimmedName,
@@ -195,74 +208,7 @@ export default async function handler(req, res) {
       });
     }
 
-    const processNextUrl = buildProcessNextUrl();
-
-    if (!processNextUrl) {
-      await updateSubmissionFailure(
-        submission.id,
-        "Processing trigger URL is not configured"
-      );
-
-      return res.status(500).json({
-        error: "Processing trigger URL is not configured",
-        job_id: submission.job_id,
-        submission_id: submission.id,
-      });
-    }
-
-    let processResponse;
-
-    try {
-      processResponse = await fetch(processNextUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-internal-secret": INTERNAL_API_SECRET,
-        },
-        body: JSON.stringify({
-          job_id: submission.job_id,
-        }),
-      });
-    } catch (processRequestError) {
-      console.error("Process trigger request failed:", processRequestError);
-
-      await updateSubmissionFailure(
-        submission.id,
-        "Automatic processing trigger request failed"
-      );
-
-      return res.status(500).json({
-        error: "Automatic processing trigger request failed",
-        job_id: submission.job_id,
-        submission_id: submission.id,
-      });
-    }
-
-    let processResult = null;
-
-    try {
-      processResult = await processResponse.json();
-    } catch {
-      processResult = null;
-    }
-
-    if (!processResponse.ok) {
-      console.error("Process trigger responded with error:", {
-        status: processResponse.status,
-        body: processResult,
-      });
-
-      await updateSubmissionFailure(
-        submission.id,
-        processResult?.error || "Automatic processing trigger failed"
-      );
-
-      return res.status(500).json({
-        error: processResult?.error || "Automatic processing trigger failed",
-        job_id: submission.job_id,
-        submission_id: submission.id,
-      });
-    }
+    triggerProcessingInBackground(submission.job_id);
 
     return res.status(200).json({
       success: true,
