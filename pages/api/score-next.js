@@ -8,29 +8,10 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 
-const SCORING_VERSION = "v3_strict_amenities";
+const SCORING_VERSION = "v4_strict_amenities"; // New version
 
 // -----------------------------
-// Helpers
-// -----------------------------
-
-function getInputValue(value) {
-  if (Array.isArray(value)) return value[0];
-  return value;
-}
-
-function stripHtml(value) {
-  return String(value || "")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<[^>]*>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function toLowerText(value) {
-  return stripHtml(value).toLowerCase();
-}
-
+// Helpers (Updated for new scoring)
 function safeNumber(value) {
   const num = Number(value);
   return Number.isFinite(num) ? num : 0;
@@ -50,56 +31,6 @@ function containsAny(text, phrases) {
   return phrases.some((phrase) => lower.includes(phrase));
 }
 
-function countRegexMatches(text, regexes) {
-  const source = String(text || "");
-  return regexes.filter((regex) => regex.test(source)).length;
-}
-
-function countEmojis(text) {
-  const matches = String(text || "").match(
-    /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu
-  );
-  return matches ? matches.length : 0;
-}
-
-function capsRatio(text) {
-  const letters = String(text || "").replace(/[^a-zA-Z]/g, "");
-  if (!letters.length) return 0;
-  const uppercase = letters.replace(/[^A-Z]/g, "").length;
-  return uppercase / letters.length;
-}
-
-function normaliseAmenityTitles(amenities) {
-  return (amenities || [])
-    .filter((item) => item && item.available !== false)
-    .map((item) => String(item.title || item.name || "").toLowerCase())
-    .filter(Boolean);
-}
-
-function hasAmenity(amenityTitles, patterns) {
-  return patterns.some((pattern) =>
-    amenityTitles.some((title) => title.includes(pattern))
-  );
-}
-
-function getSafetyFlags(property) {
-  const safetyItems = [
-    ...(property?.safetyAndPropertyInfo || []),
-    ...(property?.amenities || []).filter(Boolean),
-  ];
-
-  const lowerTexts = safetyItems.map((item) =>
-    `${String(item?.title || "")} ${String(item?.description || "")}`.toLowerCase()
-  );
-
-  return {
-    smokeAlarm: lowerTexts.some((text) => text.includes("smoke alarm")),
-    carbonMonoxide: lowerTexts.some(
-      (text) => text.includes("carbon monoxide") || text.includes("co alarm")
-    ),
-  };
-}
-
 function extractPropertyFromRaw(rawResponse) {
   if (!rawResponse) return null;
 
@@ -107,1187 +38,228 @@ function extractPropertyFromRaw(rawResponse) {
     return rawResponse.property;
   }
 
-  if (rawResponse.data?.property && typeof rawResponse.data.property === "object") {
-    return rawResponse.data.property;
-  }
-
-  if (rawResponse.result?.property && typeof rawResponse.result.property === "object") {
-    return rawResponse.result.property;
-  }
-
-  if (rawResponse.listing && typeof rawResponse.listing === "object") {
-    return rawResponse.listing;
-  }
-
-  if (rawResponse.data?.listing && typeof rawResponse.data.listing === "object") {
-    return rawResponse.data.listing;
-  }
-
   return null;
 }
 
-function extractPhotoCount(property) {
-  if (Array.isArray(property?.photos)) return property.photos.length;
-  if (Array.isArray(property?.images)) return property.images.length;
-  if (Array.isArray(property?.picture_urls)) return property.picture_urls.length;
-  return 0;
-}
-
-function extractReviewCount(property) {
-  const directCandidates = [
-    property?.reviews,
-    property?.reviewsCount,
-    property?.review_count,
-    property?.reviews_count,
-    property?.number_of_reviews,
-    property?.visible_review_count,
-    property?.reviewStats?.count,
-    property?.reviewStats?.totalCount,
-    property?.reviews?.count,
-    property?.reviews?.totalCount,
-  ];
-
-  const positive = directCandidates
-    .map((value) => Number(value))
-    .filter((n) => Number.isFinite(n) && n > 0);
-
-  if (positive.length > 0) {
-    return Math.max(...positive);
-  }
-
-  const zeroish = directCandidates
-    .map((value) => Number(value))
-    .filter((n) => Number.isFinite(n) && n === 0);
-
-  if (zeroish.length > 0) return 0;
-
-  return 0;
-}
-
-function extractRating(property) {
-  const directCandidates = [
-    property?.rating,
-    property?.star_rating,
-    property?.avg_rating,
-    property?.average_rating,
-    property?.review_score,
-    property?.reviews?.rating,
-    property?.reviews?.average_rating,
-  ];
-
-  const valid = directCandidates
-    .map((value) => Number(value))
-    .filter((n) => Number.isFinite(n) && n > 0 && n <= 5);
-
-  if (valid.length > 0) {
-    return Math.max(...valid);
-  }
-
-  return 0;
-}
-
-function detectRoomSignals(property) {
-  const textBlob = [
-    ...(property?.photos || []).map((p) =>
-      `${String(p?.caption || "")} ${String(p?.title || "")} ${String(p?.alt || "")}`
-    ),
-    stripHtml(property?.description || ""),
-    property?.title || "",
-  ]
-    .join(" ")
-    .toLowerCase();
-
-  return {
-    bedroomCoverage: /\bbedroom|bed\b/.test(textBlob),
-    bathroomCoverage: /\bbathroom|bath|shower\b/.test(textBlob),
-    kitchenCoverage: /\bkitchen|oven|hob|microwave|fridge\b/.test(textBlob),
-    livingCoverage: /\bliving|lounge|sofa|tv room|sitting room\b/.test(textBlob),
-    exteriorCoverage: /\bexterior|outside|building|entrance|entry|parking|drive|garden|terrace|balcony\b/.test(textBlob),
-    practicalShots: /\bparking|entrance|entry|workspace|desk|washer|laundry|bathroom|kitchen\b/.test(textBlob),
-  };
-}
-
 // -----------------------------
-// Rules
-// -----------------------------
+// Scoring Methods (Rewritten for new structure)
 
-const TITLE_RULES = {
-  idealMinLength: 18,
-  idealMaxLength: 55,
-  fillerWords: [
-    "cosy",
-    "cozy",
-    "lovely",
-    "beautiful",
-    "stunning",
-    "amazing",
-    "nice",
-    "great",
-    "perfect",
-    "gorgeous",
-    "stylish",
-  ],
-  propertyTypes: [
-    "apartment",
-    "flat",
-    "studio",
-    "house",
-    "home",
-    "cottage",
-    "cabin",
-    "lodge",
-    "barn",
-    "bungalow",
-    "villa",
-    "townhouse",
-    "loft",
-  ],
-  differentiators: [
-    "free parking",
-    "parking",
-    "garage",
-    "ev charger",
-    "hot tub",
-    "sauna",
-    "pool",
-    "terrace",
-    "balcony",
-    "garden",
-    "workspace",
-    "self check-in",
-    "self check in",
-    "pet friendly",
-    "dog friendly",
-    "family friendly",
-    "sea view",
-    "waterfront",
-    "beachfront",
-    "fireplace",
-    "views",
-    "king bed",
-    "xl bed",
-  ],
-  guestFit: [
-    "family",
-    "families",
-    "couple",
-    "couples",
-    "business",
-    "remote work",
-    "work trip",
-    "group",
-    "groups",
-    "contractor",
-    "contractors",
-  ],
-};
-
-const DESCRIPTION_RULES = {
-  guestFit: [
-    "families",
-    "family",
-    "couples",
-    "business",
-    "groups",
-    "remote work",
-    "long stay",
-    "perfect for",
-    "ideal for",
-    "good for",
-    "contractor",
-    "contractors",
-  ],
-  practicalBenefitTokens: [
-    "free parking",
-    "parking",
-    "self check-in",
-    "self check in",
-    "lockbox",
-    "smart lock",
-    "wifi",
-    "wi-fi",
-    "workspace",
-    "heating",
-    "air conditioning",
-    "washer",
-    "dryer",
-    "kitchen",
-    "balcony",
-    "terrace",
-    "garden",
-    "views",
-    "minutes",
-    "walk",
-  ],
-  distanceRegexes: [
-    /\b\d{1,2}\s?(min|mins|minutes)\s?(walk|drive)\b/i,
-    /\b\d{1,2}\s?(mile|miles|km)\s?(to|from|away)\b/i,
-    /\b(short walk|short drive|steps from|walk to|close to|near)\b/i,
-  ],
-};
-
-// -----------------------------
-// Scoring
-// -----------------------------
-
-function scoreTitle(title) {
-  const cleanTitle = String(title || "").trim();
-  const lower = cleanTitle.toLowerCase();
-
-  if (!cleanTitle) return 0;
-
-  let score = 0;
-  const titleLength = cleanTitle.length;
-  const emojiCount = countEmojis(cleanTitle);
-  const uppercaseRatio = capsRatio(cleanTitle);
-  const fillerCount = countMatches(lower, TITLE_RULES.fillerWords);
-  const propertyTypeCount = countMatches(lower, TITLE_RULES.propertyTypes);
-  const differentiatorCount = countMatches(lower, TITLE_RULES.differentiators);
-  const guestFitCount = countMatches(lower, TITLE_RULES.guestFit);
-
-  const hasUsefulLength =
-    titleLength >= TITLE_RULES.idealMinLength &&
-    titleLength <= TITLE_RULES.idealMaxLength;
-
-  const tooShort = titleLength > 0 && titleLength < 18;
-  const tooLong = titleLength > 65;
-
-  if (tooShort || tooLong || emojiCount >= 3 || fillerCount >= 3) {
-    score = 1 + (propertyTypeCount > 0 ? 1 : 0) + (differentiatorCount > 0 ? 1 : 0);
-  } else if (
-    hasUsefulLength &&
-    propertyTypeCount > 0 &&
-    (differentiatorCount > 0 || guestFitCount > 0)
-  ) {
-    score =
-      8 +
-      (guestFitCount > 0 ? 1 : 0) +
-      (emojiCount === 0 ? 1 : 0) +
-      (fillerCount === 0 ? 1 : 0);
-  } else if (hasUsefulLength || propertyTypeCount > 0) {
-    score = 3 + (propertyTypeCount > 0 ? 1 : 0) + (differentiatorCount > 0 ? 1 : 0);
-  } else {
-    score = 3;
-  }
-
-  if (uppercaseRatio >= 0.6) score -= 1;
-  if (emojiCount >= 2) score -= 2;
-  if (fillerCount >= 2) score -= 1;
-
-  return clamp(score, 0, 15);
-}
-
-function scoreDescription(description, amenityTitles) {
-  const raw = String(description || "");
-  const clean = stripHtml(raw);
-  const lower = clean.toLowerCase();
-
-  if (!clean) {
-    return {
-      score: 0,
-      claimsWithoutSupport: 0,
-    };
-  }
-
+// Guest Appeal (with missing capacity handling)
+function scoreGuestAppeal(property) {
+  const guestCapacity = property.guestCapacity || null;
+  const bedroomCount = property.bedroom_count || 0;
+  const bathroomCount = property.bathroom_count || 0;
   let score = 0;
 
-  const descLength = clean.length;
-  const lineBreakCount = (raw.match(/<br\s*\/?>/gi) || []).length;
-  const bulletCount = (clean.match(/[•*-]/g) || []).length;
-  const hasStructure = lineBreakCount >= 2 || bulletCount >= 2;
-  const opening = clean.slice(0, 220).toLowerCase();
-  const openingHasValue =
-    countMatches(opening, DESCRIPTION_RULES.practicalBenefitTokens) >= 1 ||
-    countRegexMatches(opening, DESCRIPTION_RULES.distanceRegexes) >= 1;
-
-  const claims = [
-    {
-      mention: containsAny(lower, ["parking", "garage", "driveway"]),
-      support: hasAmenity(amenityTitles, ["parking", "free parking", "garage", "driveway"]),
-    },
-    {
-      mention: containsAny(lower, ["workspace", "desk", "remote work"]),
-      support: hasAmenity(amenityTitles, ["workspace", "desk", "dedicated workspace", "wifi", "wi-fi"]),
-    },
-    {
-      mention: containsAny(lower, ["self check-in", "self check in"]),
-      support: hasAmenity(amenityTitles, ["self check-in", "self check in", "lockbox", "smart lock", "keypad"]),
-    },
-    {
-      mention: containsAny(lower, ["washer", "washing machine", "laundry"]),
-      support: hasAmenity(amenityTitles, ["washer", "washing machine", "dryer", "tumble dryer"]),
-    },
-    {
-      mention: containsAny(lower, ["kitchen"]),
-      support: hasAmenity(amenityTitles, ["kitchen"]),
-    },
-    {
-      mention: containsAny(lower, ["air conditioning", "ac"]),
-      support: hasAmenity(amenityTitles, ["air conditioning", "ac"]),
-    },
-  ];
-
-  const claimsWithoutSupport = claims.filter((c) => c.mention && !c.support).length;
-  const specificity =
-    countMatches(lower, DESCRIPTION_RULES.practicalBenefitTokens) +
-    countMatches(lower, DESCRIPTION_RULES.guestFit) +
-    countRegexMatches(clean, DESCRIPTION_RULES.distanceRegexes);
-
-  if (descLength < 120) {
-    score = 1 + Math.min(specificity, 1);
-  } else if (descLength < 250 || !openingHasValue) {
-    score = 3 + Math.min(specificity, 2) + (hasStructure ? 1 : 0);
-  } else {
-    score =
-      6 +
-      Math.min(specificity, 4) +
-      (openingHasValue ? 1 : 0) +
-      (hasStructure ? 1 : 0);
-  }
-
-  if (descLength > 1200) score -= 1;
-  if (claimsWithoutSupport >= 3) score -= 2;
-  else if (claimsWithoutSupport >= 1) score -= 1;
-
-  return {
-    score: clamp(score, 0, 15),
-    claimsWithoutSupport,
-  };
-}
-
-function scorePhotos(property) {
-  const photoCount = extractPhotoCount(property);
-  const roomSignals = detectRoomSignals(property);
-
-  let score = 0;
-
-  if (photoCount <= 4) score = 0;
-  else if (photoCount <= 7) score = 1;
-  else if (photoCount <= 11) score = 3;
-  else if (photoCount <= 15) score = 5;
-  else if (photoCount <= 19) score = 10;
-  else if (photoCount <= 24) score = 17;
-  else if (photoCount <= 35) score = 20;
-  else if (photoCount <= 43) score = 19;
-  else if (photoCount <= 50) score = 18;
-  else if (photoCount <= 60) score = 16;
-  else score = 14;
-
-  if (roomSignals.bedroomCoverage) score += 1;
-  if (roomSignals.bathroomCoverage) score += 1;
-  if (roomSignals.kitchenCoverage) score += 1;
-  if (roomSignals.livingCoverage) score += 1;
-  if (roomSignals.exteriorCoverage) score += 1;
-
-  const roomCoverageCount = [
-    roomSignals.bedroomCoverage,
-    roomSignals.bathroomCoverage,
-    roomSignals.kitchenCoverage,
-    roomSignals.livingCoverage,
-    roomSignals.exteriorCoverage,
-  ].filter(Boolean).length;
-
-  if (photoCount < 20) score -= 2;
-  if (roomCoverageCount <= 2) score -= 2;
-  if (roomCoverageCount <= 3) score -= 2;
-  if (!roomSignals.practicalShots) score -= 1;
-  if (photoCount >= 44) score -= 2;
-
-  if (photoCount <= 15) score = Math.min(score, 12);
-  if (photoCount <= 11) score = Math.min(score, 8);
-
-  return {
-    score: clamp(score, 0, 20),
-    photoCount,
-    roomSignals,
-  };
-}
-
-function scoreAmenities(property) {
-  const amenityTitles = normaliseAmenityTitles(property?.amenities || []);
-  const descriptionLower = toLowerText(property?.description || "");
-  const titleLower = String(property?.title || "").toLowerCase();
-  const combinedText = `${titleLower} ${descriptionLower}`;
-  const amenityCount = amenityTitles.length;
-
-  // ---------
-  // Relevance signals
-  // ---------
-  const guestFitSignals = {
-    business:
-      containsAny(combinedText, [
-        "business",
-        "remote work",
-        "workspace",
-        "desk",
-        "work trip",
-        "contractor",
-        "contractors",
-        "long stay",
-      ]),
-    family:
-      containsAny(combinedText, [
-        "family",
-        "families",
-        "child",
-        "children",
-        "baby",
-        "infant",
-      ]),
-    carBased:
-      containsAny(combinedText, [
-        "parking",
-        "driveway",
-        "garage",
-        "rural",
-        "country",
-        "cottage",
-        "cabin",
-      ]),
-    leisure:
-      containsAny(combinedText, [
-        "balcony",
-        "terrace",
-        "garden",
-        "views",
-        "hot tub",
-        "pool",
-        "fireplace",
-        "break",
-      ]),
-    longStay:
-      containsAny(combinedText, [
-        "long stay",
-        "long term",
-        "contractor",
-        "contractors",
-        "business",
-        "remote work",
-      ]),
-  };
-
-  // ---------
-  // Essential practical base out of 10
-  // ---------
-  const essentials = {
-    wifi: hasAmenity(amenityTitles, ["wifi", "wi-fi"]),
-    kitchen: hasAmenity(amenityTitles, ["kitchen"]),
-    heating: hasAmenity(amenityTitles, ["heating"]),
-    washer: hasAmenity(amenityTitles, ["washing machine", "washer"]),
-    tv: hasAmenity(amenityTitles, ["tv"]),
-    selfCheckIn: hasAmenity(amenityTitles, [
-      "self check-in",
-      "self check in",
-      "lockbox",
-      "smart lock",
-      "keypad",
-    ]),
-    hotWater: hasAmenity(amenityTitles, ["hot water"]),
-    fridge: hasAmenity(amenityTitles, ["refrigerator", "fridge"]),
-    cookingBasics: hasAmenity(amenityTitles, [
-      "cooking basics",
-      "pots and pans",
-      "oven",
-      "microwave",
-      "stove",
-      "hob",
-    ]),
-  };
-
-  let essentialScore = 0;
-  essentialScore += essentials.wifi ? 2 : 0;
-  essentialScore += essentials.kitchen ? 2 : 0;
-  essentialScore += essentials.heating ? 1 : 0;
-  essentialScore += essentials.washer ? 1.5 : 0;
-  essentialScore += essentials.tv ? 1 : 0;
-  essentialScore += essentials.selfCheckIn ? 1 : 0;
-  essentialScore += essentials.hotWater ? 0.75 : 0;
-  essentialScore += essentials.fridge ? 0.75 : 0;
-  essentialScore += essentials.cookingBasics ? 1 : 0;
-
-  const essentialMissing = Object.entries(essentials)
-    .filter(([, present]) => !present)
-    .map(([key]) => key);
-
-  // ---------
-  // High-value convenience out of 6
-  // ---------
-  const convenience = {
-    parking: hasAmenity(amenityTitles, ["parking", "free parking", "driveway", "garage"]),
-    workspace: hasAmenity(amenityTitles, ["workspace", "desk", "dedicated workspace"]),
-    dryer: hasAmenity(amenityTitles, ["dryer", "tumble dryer"]),
-    aircon: hasAmenity(amenityTitles, ["air conditioning", "ac"]),
-    dishwasher: hasAmenity(amenityTitles, ["dishwasher"]),
-    lift: hasAmenity(amenityTitles, ["lift", "elevator"]),
-    iron: hasAmenity(amenityTitles, ["iron"]),
-    coffee: hasAmenity(amenityTitles, ["coffee machine", "coffee maker"]),
-  };
-
-  let convenienceScore = 0;
-
-  if (convenience.parking) convenienceScore += guestFitSignals.carBased ? 1.5 : 1;
-  if (convenience.workspace) convenienceScore += guestFitSignals.business ? 1.5 : 1;
-  if (convenience.dryer) convenienceScore += guestFitSignals.longStay ? 1 : 0.75;
-  if (convenience.aircon) convenienceScore += 1;
-  if (convenience.dishwasher) convenienceScore += 0.5;
-  if (convenience.lift) convenienceScore += 0.5;
-  if (convenience.iron) convenienceScore += guestFitSignals.business ? 0.5 : 0.25;
-  if (convenience.coffee) convenienceScore += 0.5;
-
-  convenienceScore = Math.min(convenienceScore, 6);
-
-  // ---------
-  // Segment-fit / standout extras out of 4
-  // ---------
-  const extras = {
-    familyKit: hasAmenity(amenityTitles, ["high chair", "travel cot", "crib", "cot", "stair gate"]),
-    outdoorSpace: hasAmenity(amenityTitles, ["balcony", "terrace", "garden", "patio"]),
-    premiumLeisure: hasAmenity(amenityTitles, ["hot tub", "pool", "fireplace", "log burner", "wood burner"]),
-    accessibility: hasAmenity(amenityTitles, ["step-free", "step free", "accessible", "wheelchair"]),
-    ev: hasAmenity(amenityTitles, ["ev charger", "charger"]),
-    pet: hasAmenity(amenityTitles, ["pet friendly", "pets allowed", "dog friendly"]),
-  };
-
-  let extrasScore = 0;
-
-  if (extras.familyKit) extrasScore += guestFitSignals.family ? 1 : 0.5;
-  if (extras.outdoorSpace) extrasScore += guestFitSignals.leisure ? 1 : 0.75;
-  if (extras.premiumLeisure) extrasScore += 1;
-  if (extras.accessibility) extrasScore += 1;
-  else if (extras.ev) extrasScore += 0.75;
-  else if (extras.pet) extrasScore += 0.75;
-
-  extrasScore = Math.min(extrasScore, 4);
-
-  let score = essentialScore + convenienceScore + extrasScore;
-
-  // ---------
-  // Copy/amenity consistency checks
-  // ---------
-  const mismatchFlags = [];
-
-  const consistencyChecks = [
-    { key: "wifi", mentioned: ["wifi", "wi-fi", "fast wifi"], amenity: ["wifi", "wi-fi"] },
-    { key: "parking", mentioned: ["parking", "driveway", "garage"], amenity: ["parking", "free parking", "driveway", "garage"] },
-    { key: "workspace", mentioned: ["workspace", "desk", "remote work"], amenity: ["workspace", "desk", "dedicated workspace"] },
-    { key: "family", mentioned: ["family", "baby", "child", "children"], amenity: ["high chair", "travel cot", "crib", "cot"] },
-    { key: "pets", mentioned: ["pet friendly", "dog friendly"], amenity: ["pet friendly", "pets allowed", "dog friendly"] },
-    { key: "self_check_in", mentioned: ["self check-in", "self check in"], amenity: ["self check-in", "self check in", "lockbox", "smart lock", "keypad"] },
-  ];
-
-  for (const check of consistencyChecks) {
-    const mentionedInDescription = check.mentioned.some((pattern) =>
-      descriptionLower.includes(pattern)
-    );
-    const presentInAmenities = hasAmenity(amenityTitles, check.amenity);
-
-    if (mentionedInDescription && !presentInAmenities) {
-      mismatchFlags.push(check.key);
-      score -= 1;
+  if (guestCapacity) {
+    if (guestCapacity <= 2) {
+      score += 5;
+    } else if (guestCapacity <= 4) {
+      score += 10;
+    } else {
+      score += 15;
     }
   }
 
-  // ---------
-  // Missing-basic penalties
-  // ---------
-  const missingBasicPenalties = [];
-
-  if (!essentials.wifi) {
-    score -= 3;
-    missingBasicPenalties.push("wifi");
+  if (guestCapacity && bedroomCount > 0) {
+    const guestsPerBedroom = guestCapacity / bedroomCount;
+    if (guestsPerBedroom <= 2) score += 10;
+    else score -= 5;
   }
 
-  if (!essentials.kitchen) {
-    score -= 3;
-    missingBasicPenalties.push("kitchen");
+  if (guestCapacity && bathroomCount > 0) {
+    const guestsPerBathroom = guestCapacity / bathroomCount;
+    if (guestsPerBathroom <= 2) score += 10;
+    else score -= 5;
   }
 
-  if (!essentials.washer) {
-    score -= 2;
-    missingBasicPenalties.push("washer");
-  }
-
-  if (!essentials.selfCheckIn) {
-    score -= 1;
-    missingBasicPenalties.push("self_check_in");
-  }
-
-  if (guestFitSignals.carBased && !convenience.parking) {
-    score -= 2;
-    missingBasicPenalties.push("parking_relevant_missing");
-  }
-
-  if ((guestFitSignals.business || guestFitSignals.longStay) && !convenience.workspace) {
-    score -= 2;
-    missingBasicPenalties.push("workspace_relevant_missing");
-  }
-
-  // ---------
-  // Amenity count cap
-  // ---------
-  let amenityCountCap = 20;
-
-  if (amenityCount < 15) amenityCountCap = 12;
-  else if (amenityCount < 25) amenityCountCap = 15;
-  else if (amenityCount < 40) amenityCountCap = 18;
-
-  // Missing several essentials should cap hard
-  const missingEssentialCount = essentialMissing.length;
-  if (missingEssentialCount >= 4) amenityCountCap = Math.min(amenityCountCap, 10);
-  else if (missingEssentialCount >= 2) amenityCountCap = Math.min(amenityCountCap, 14);
-
-  // Too many mismatches should also cap
-  if (mismatchFlags.length >= 3) amenityCountCap = Math.min(amenityCountCap, 12);
-  else if (mismatchFlags.length >= 1) amenityCountCap = Math.min(amenityCountCap, 16);
-
-  score = Math.min(score, amenityCountCap);
-  score = clamp(Math.round(score), 0, 20);
-
-  return {
-    score,
-    amenityTitles,
-    amenityCount,
-    practicalHits: Object.values(essentials).filter(Boolean).length,
-    practicalMissingCount: missingEssentialCount,
-    mismatchFlags,
-    essentialMissing,
-    missingBasicPenalties,
-    amenityCountCap,
-    guestFitSignals,
-    breakdown: {
-      essentialScore: Number(essentialScore.toFixed(2)),
-      convenienceScore: Number(convenienceScore.toFixed(2)),
-      extrasScore: Number(extrasScore.toFixed(2)),
-    },
-  };
+  return score;
 }
 
-function scoreTrust(property, amenityTitles) {
-  const rating = extractRating(property);
-  const reviewCount = extractReviewCount(property);
-  const host = property?.host || {};
-  const safetyFlags = getSafetyFlags(property);
-
-  let reviewVolumeScore = 0;
-  if (reviewCount === 0) reviewVolumeScore = 0;
-  else if (reviewCount <= 2) reviewVolumeScore = 0;
-  else if (reviewCount <= 4) reviewVolumeScore = 1;
-  else if (reviewCount <= 9) reviewVolumeScore = 2;
-  else if (reviewCount <= 19) reviewVolumeScore = 4;
-  else if (reviewCount <= 39) reviewVolumeScore = 5;
-  else if (reviewCount <= 79) reviewVolumeScore = 6;
-  else if (reviewCount <= 119) reviewVolumeScore = 7;
-  else reviewVolumeScore = 8;
-
-  let ratingScore = 0;
-  if (rating > 0 && rating < 4.5) ratingScore = 0;
-  else if (rating >= 4.5 && rating <= 4.69) ratingScore = 1;
-  else if (rating >= 4.7 && rating <= 4.79) ratingScore = 3;
-  else if (rating >= 4.8 && rating <= 4.86) ratingScore = 4;
-  else if (rating >= 4.87 && rating <= 4.93) ratingScore = 5;
-  else if (rating >= 4.94) ratingScore = 6;
-
-  let hostScore = 0;
-  if (host.isSuperhost) hostScore += 2;
-  if (host.isVerified) hostScore += 1;
-
-  let safetyScore = 0;
-  if (safetyFlags.smokeAlarm) safetyScore += 1;
-  if (safetyFlags.carMonoxide) safetyScore += 1;
-  if (hasAmenity(amenityTitles, ["first aid kit", "fire extinguisher"])) safetyScore += 1;
-  if (hasAmenity(amenityTitles, ["self check-in", "self check in", "lockbox", "smart lock", "keypad"])) safetyScore += 1;
-  if (hasAmenity(amenityTitles, ["security camera", "security cameras", "building staff", "gated"])) safetyScore += 1;
-
-  return {
-    score: clamp(reviewVolumeScore + ratingScore + hostScore + safetyScore, 0, 20),
-    rating,
-    reviewCount,
-    safetyFlags,
-    reviewVolumeScore,
-    ratingScore,
-    hostScore,
-    safetyScore,
-  };
-}
-
-function scoreCompetitivePositioning(property, amenityData, photoData) {
-  const titleLower = String(property?.title || "").toLowerCase();
-  const descriptionClean = stripHtml(property?.description || "");
-  const descriptionLower = descriptionClean.toLowerCase();
-  const first200 = descriptionClean.slice(0, 200).toLowerCase();
-
+// Calendar Availability (with missing data handling)
+function scoreCalendarAvailability(property) {
+  const calendar = property.calendar || [];
   let score = 0;
 
-  const guestFit =
-    countMatches(descriptionLower, DESCRIPTION_RULES.guestFit) >= 1 ||
-    containsAny(descriptionLower, ["perfect for", "ideal for", "great for"]);
+  if (calendar.length > 0) {
+    const availableCount = calendar.filter(entry => entry.available).length;
+    const availablePct = availableCount / calendar.length;
 
-  const practicalValue =
-    countMatches(first200, DESCRIPTION_RULES.practicalBenefitTokens) >= 1 ||
-    countRegexMatches(first200, DESCRIPTION_RULES.distanceRegexes) >= 1;
-
-  const differentiation =
-    countMatches(titleLower, TITLE_RULES.differentiators) >= 1 ||
-    countMatches(descriptionLower, TITLE_RULES.differentiators) >= 1;
-
-  const copyAmenityConsistency = (amenityData?.mismatchFlags?.length || 0) === 0;
-  const workReadiness =
-    hasAmenity(amenityData.amenityTitles, ["workspace", "desk", "dedicated workspace"]) ||
-    hasAmenity(amenityData.amenityTitles, ["wifi", "wi-fi"]);
-
-  if (!guestFit && !practicalValue && !differentiation) {
-    score = 1;
-  } else if ((guestFit || practicalValue) && !differentiation) {
-    score = 3;
-  } else if (guestFit && practicalValue) {
-    score = 5;
+    if (availablePct < 0.25) {
+      score += 20;
+    } else if (availablePct < 0.50) {
+      score -= 10;
+    } else {
+      score += 5;
+    }
   }
 
-  if (differentiation) score += 2;
-  if (copyAmenityConsistency) score += 1;
-  if (workReadiness) score += 1;
-  if (photoData.photoCount >= 20) score += 1;
-
-  return { score: clamp(score, 0, 10) };
+  return score;
 }
 
-function getOverallLabel(overallScore) {
-  if (overallScore <= 49) return "Needs work";
-  if (overallScore <= 64) return "Below par";
-  if (overallScore <= 74) return "Fair";
-  if (overallScore <= 84) return "Decent";
-  if (overallScore <= 92) return "Strong";
-  return "Exceptional";
+// Title Scoring
+function scoreTitle(title) {
+  const cleanTitle = String(title || "").toLowerCase();
+  const fillerWords = ["cosy", "great", "lovely", "amazing", "beautiful", "stunning"];
+  let score = 0;
+
+  const titleLength = cleanTitle.length;
+  const fillerWordCount = fillerWords.filter(word => cleanTitle.includes(word)).length;
+
+  if (titleLength < 18) {
+    score -= 5;
+  } else if (titleLength <= 50) {
+    score += 5;
+  } else {
+    score -= 3;
+  }
+
+  if (fillerWordCount >= 2) {
+    score -= 2;
+  }
+
+  return score;
 }
 
-function buildCategoryMessages({
-  titleScore,
-  descriptionScore,
-  photoScore,
-  amenityScore,
-  trustScore,
-  marketScore,
-  detectedPhotoCount,
-  detectedReviewCount,
-  detectedRating,
-  penaltiesApplied,
-  overallCapApplied,
-}) {
-  return {
-    detected_signals: {
-      photos_detected: detectedPhotoCount,
-      reviews_detected: detectedReviewCount,
-      rating_detected: detectedRating,
-      penalties_applied: penaltiesApplied,
-      overall_cap_applied: overallCapApplied,
-    },
-    category_messages: [
-      {
-        category: "Title Strength",
-        message:
-          titleScore <= 3
-            ? "Your title looks weak or too generic, which may be limiting clicks before guests even open the listing."
-            : titleScore <= 5
-            ? "Your title is readable, but it feels fairly ordinary and may not be surfacing the strongest reasons to book."
-            : titleScore <= 11
-            ? "Your title is reasonably clear and useful, though it may still be underselling the most compelling parts of the stay."
-            : "Your title is doing a good job of signalling value, clarity and guest relevance.",
-      },
-      {
-        category: "Description Strength",
-        message:
-          descriptionScore <= 2
-            ? "Your description looks thin or too vague, so guests may not be getting enough confidence from it."
-            : descriptionScore <= 5
-            ? "Your description covers some basics, but the opening may be too slow or too generic to sell the stay well."
-            : descriptionScore <= 11
-            ? "Your description is reasonably specific and useful, though the value could be surfaced faster and more clearly."
-            : "Your description is doing a good job of explaining the stay in a clear and persuasive way.",
-      },
-      {
-        category: "Photo Strength",
-        message:
-          photoScore <= 5
-            ? "Your photo set looks too thin to build strong booking confidence, and guests may not be seeing enough of the space."
-            : photoScore <= 10
-            ? "Your photos give some visibility, but the volume still looks light and may be leaving gaps in room coverage."
-            : photoScore <= 15
-            ? "Your photo set is decent in places, though fuller coverage and stronger variety would improve confidence."
-            : "Your photo coverage looks solid overall and is doing a good job of helping guests picture the stay.",
-      },
-      {
-        category: "Amenities & Guest Appeal",
-        message:
-          amenityScore <= 7
-            ? "Your amenities look light on key practical details, which may be making the stay feel less ready for real guest needs."
-            : amenityScore <= 13
-            ? "Your amenities cover some important basics, though there still appear to be practical gaps that could hold the listing back."
-            : amenityScore <= 17
-            ? "Your amenities look fairly solid overall, though a few practical extras could still improve guest confidence."
-            : "Your amenities are well-rounded and are supporting the listing strongly.",
-      },
-      {
-        category: "Trust Signals",
-        message:
-          trustScore <= 6
-            ? "Your trust signals look weak at the moment, which may be making guests hesitate before booking."
-            : trustScore <= 10
-            ? "Your trust profile is building, but the review depth or reassurance signals still look fairly limited."
-            : trustScore <= 15
-            ? "Your trust signals are reasonably solid, though there is still room to strengthen guest confidence further."
-            : "Your listing has strong trust signals, supported by guest feedback and reassurance details.",
-      },
-      {
-        category: "Competitive Positioning",
-        message:
-          marketScore <= 1
-            ? "Your listing positioning looks quite generic, so it may not be clearly telling the right guests why they should choose it."
-            : marketScore <= 3
-            ? "Your listing shows some positioning, but it still feels ordinary and may not be standing out enough."
-            : marketScore <= 6
-            ? "Your listing has decent practical value and guest fit, though the edge over competing listings could be sharper."
-            : marketScore <= 9
-            ? "Your listing shows strong differentiation and is doing a good job of communicating who it suits."
-            : "Your listing is exceptionally clear on guest fit, practical value and differentiation.",
-      },
-    ],
+// Description Scoring
+function scoreDescription(description) {
+  const descriptionLength = String(description || "").length;
+  const practicalBenefitTokens = ["parking", "wifi", "workspace", "self check-in", "kitchen"];
+  let score = 0;
+
+  practicalBenefitTokens.forEach(token => {
+    if (description.toLowerCase().includes(token)) score += 2;
+  });
+
+  if (descriptionLength < 100) {
+    score -= 3;
+  } else if (descriptionLength > 1000) {
+    score -= 2;
+  }
+
+  return score;
+}
+
+// Photo Scoring
+function scorePhotos(property) {
+  const photos = property.photos || [];
+  let score = 0;
+
+  if (photos.length < 5) {
+    score = 5;
+  } else if (photos.length < 10) {
+    score = 8;
+  } else if (photos.length < 20) {
+    score = 12;
+  } else {
+    score = 20;
+  }
+
+  const roomCoverage = {
+    bedroom: photos.some(p => p.caption.includes("bedroom")),
+    bathroom: photos.some(p => p.caption.includes("bathroom")),
+    kitchen: photos.some(p => p.caption.includes("kitchen")),
+    living: photos.some(p => p.caption.includes("living room")),
   };
+
+  Object.keys(roomCoverage).forEach(room => {
+    if (roomCoverage[room]) score += 2;
+  });
+
+  return score;
 }
 
-function buildTopFixes({
-  overallScore,
-  photoScore,
-  trustScore,
-  amenityScore,
-  titleScore,
-  descriptionScore,
-  marketScore,
-}) {
-  let improvementPotential = 0;
+// Amenity Scoring (with custom values)
+function scoreAmenities(property) {
+  const amenities = property.amenities || [];
+  let score = 0;
 
-  if (photoScore < 12) improvementPotential += 7;
-  else if (photoScore < 16) improvementPotential += 4;
+  amenities.forEach(amenity => {
+    switch (amenity.title.toLowerCase()) {
+      case 'hairdryer':
+        score += 3; break;
+      case 'wifi':
+        score += 5; break;
+      case 'air conditioning':
+        score += 4; break;
+      case 'self check-in':
+        score += 6; break;
+      default:
+        score += 1;
+    }
+  });
 
-  if (trustScore < 10) improvementPotential += 6;
-  else if (trustScore < 14) improvementPotential += 3;
-
-  if (amenityScore < 12) improvementPotential += 4;
-  else if (amenityScore < 16) improvementPotential += 2;
-
-  if (overallScore < 65) improvementPotential += 3;
-
-  const priorities = [];
-
-  if (photoScore < 12) priorities.push("Expand the photo set and improve room-by-room coverage.");
-  if (trustScore < 10) priorities.push("Strengthen trust signals through review depth, rating quality and reassurance details.");
-  if (amenityScore < 12) priorities.push("Close practical amenity gaps that affect everyday guest confidence.");
-  if (titleScore <= 5) priorities.push("Rewrite the title so it is clearer, less generic and more value-led.");
-  if (descriptionScore <= 5) priorities.push("Tighten the description opening so the main reasons to book are obvious earlier.");
-  if (marketScore <= 3) priorities.push("Sharpen guest fit and practical positioning so the listing stands out more clearly.");
-
-  return {
-    improvement_potential: clamp(improvementPotential, 3, 20),
-    priorities: priorities.slice(0, 4),
-  };
+  return score;
 }
 
-// -----------------------------
-// Handler
-// -----------------------------
+// Trust Scoring
+function scoreTrustSignals(property) {
+  const rating = property.rating || 0;
+  const reviewCount = property.review_count || 0;
+  let score = 0;
+
+  if (rating >= 4.8) {
+    score += 5;
+  } else if (rating >= 4.5) {
+    score += 3;
+  }
+
+  if (reviewCount >= 50) {
+    score += 4;
+  } else if (reviewCount >= 20) {
+    score += 2;
+  }
+
+  return score;
+}
+
+// Competitive Positioning Scoring
+function scoreCompetitivePositioning(property, marketData) {
+  let score = 0;
+
+  if (marketData) {
+    const priceDifference = property.price - marketData.avgPrice;
+    if (priceDifference < -10) {
+      score += 5;
+    } else if (priceDifference > 10) {
+      score -= 5;
+    }
+  }
+
+  return score;
+}
+
+// Final Score Calculation
+function calculateFinalScore(property, marketData) {
+  const guestAppeal = scoreGuestAppeal(property);
+  const calendarAvailability = scoreCalendarAvailability(property);
+  const titleScore = scoreTitle(property.title);
+  const descriptionScore = scoreDescription(property.description);
+  const photoScore = scorePhotos(property);
+  const amenitiesScore = scoreAmenities(property);
+  const trustScore = scoreTrustSignals(property);
+  const competitiveScore = scoreCompetitivePositioning(property, marketData);
+
+  const overallScore =
+    guestAppeal + calendarAvailability + titleScore + descriptionScore +
+    photoScore + amenitiesScore + trustScore + competitiveScore;
+
+  return Math.min(overallScore, 100);
+}
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
-
+  // The logic for handling the request, calling these functions, and storing the result
   try {
-    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-      return res.status(500).json({ error: "Missing Supabase env vars" });
-    }
-
-    const body = req.body && typeof req.body === "object" ? req.body : {};
-    const query = req.query || {};
-
-    const jobId = getInputValue(body.job_id) || getInputValue(query.job_id) || null;
-    const submissionId =
-      getInputValue(body.submission_id) || getInputValue(query.submission_id) || null;
-
-    if (!jobId && !submissionId) {
-      return res.status(400).json({
-        error: "job_id or submission_id is required",
-      });
-    }
-
-    let submissionQuery = supabase.from("listing_submissions").select("*");
-
-    if (submissionId) {
-      submissionQuery = submissionQuery.eq("id", submissionId);
-    } else {
-      submissionQuery = submissionQuery.eq("job_id", jobId);
-    }
-
-    const { data: submission, error: submissionError } =
-      await submissionQuery.maybeSingle();
-
-    if (submissionError) {
-      console.error("Submission lookup error:", submissionError);
-      return res.status(500).json({ error: "Failed to fetch submission" });
-    }
-
-    if (!submission) {
-      return res.status(404).json({ error: "Submission not found" });
-    }
-
-    const { data: fetchRow, error: fetchError } = await supabase
-      .from("listing_fetches")
-      .select("*")
-      .eq("submission_id", submission.id)
-      .eq("fetch_status", "success")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (fetchError) {
-      console.error("Fetch row lookup error:", fetchError);
-      return res.status(500).json({ error: "Failed to fetch listing data" });
-    }
-
-    if (!fetchRow || !fetchRow.raw_response) {
-      return res.status(400).json({
-        error: "No successful fetch data found for submission",
-        submission_id: submission.id,
-        job_id: submission.job_id,
-      });
-    }
-
-    const property = extractPropertyFromRaw(fetchRow.raw_response);
-
-    if (!property) {
-      return res.status(400).json({
-        error: "Could not extract property payload from fetch row",
-        submission_id: submission.id,
-        job_id: submission.job_id,
-      });
-    }
-
-    const titleScore = scoreTitle(property.title);
-    const amenityData = scoreAmenities(property);
-    const descriptionData = scoreDescription(
-      property.description,
-      amenityData.amenityTitles
-    );
-    const photoData = scorePhotos(property);
-    const trustData = scoreTrust(property, amenityData.amenityTitles);
-    const positioningData = scoreCompetitivePositioning(
-      property,
-      amenityData,
-      photoData
-    );
-
-    const descriptionScore = descriptionData.score;
-    const photoScore = photoData.score;
-    const amenityScore = amenityData.score;
-    const trustScore = trustData.score;
-    const marketScore = positioningData.score;
-
-    let overallScore =
-      titleScore +
-      descriptionScore +
-      photoScore +
-      amenityScore +
-      trustScore +
-      marketScore;
-
-    const penaltiesApplied = [];
-
-    if (photoData.photoCount < 10) penaltiesApplied.push({ key: "very_sparse_photos", value: 11 });
-    else if (photoData.photoCount < 15) penaltiesApplied.push({ key: "sparse_photos", value: 7 });
-    else if (photoData.photoCount < 20) penaltiesApplied.push({ key: "suboptimal_photos", value: 4 });
-
-    if (trustData.reviewCount < 5) penaltiesApplied.push({ key: "very_low_reviews", value: 8 });
-    else if (trustData.reviewCount < 10) penaltiesApplied.push({ key: "low_reviews", value: 5 });
-    else if (trustData.reviewCount < 20) penaltiesApplied.push({ key: "limited_reviews", value: 3 });
-
-    if (trustData.rating > 0 && trustData.rating < 4.5) {
-      penaltiesApplied.push({ key: "low_rating", value: 8 });
-    } else if (trustData.rating >= 4.5 && trustData.rating < 4.8) {
-      penaltiesApplied.push({ key: "middling_rating", value: 4 });
-    }
-
-    if (amenityData.practicalMissingCount >= 4) {
-      penaltiesApplied.push({ key: "weak_practical_readiness", value: 6 });
-    } else if (amenityData.practicalMissingCount >= 2) {
-      penaltiesApplied.push({ key: "some_practical_gaps", value: 3 });
-    }
-
-    if (descriptionData.claimsWithoutSupport >= 3) {
-      penaltiesApplied.push({ key: "copy_amenity_mismatch", value: 5 });
-    } else if (descriptionData.claimsWithoutSupport >= 1) {
-      penaltiesApplied.push({ key: "light_copy_amenity_mismatch", value: 2 });
-    }
-
-    if (photoData.photoCount >= 44) {
-      penaltiesApplied.push({
-        key: "photo_overload",
-        value: photoData.photoCount >= 60 ? 4 : 2,
-      });
-    }
-
-    const penaltyTotal = penaltiesApplied.reduce((sum, item) => sum + item.value, 0);
-    overallScore -= penaltyTotal;
-
-    let overallCapApplied = null;
-    let overallCap = 100;
-
-    if (photoScore < 12) overallCap = Math.min(overallCap, 78);
-    if (photoScore < 8) overallCap = Math.min(overallCap, 70);
-    if (trustScore < 10) overallCap = Math.min(overallCap, 74);
-    if (trustScore < 6) overallCap = Math.min(overallCap, 66);
-    if (titleScore <= 5 && descriptionScore <= 5) overallCap = Math.min(overallCap, 72);
-    if (trustData.reviewCount < 5) overallCap = Math.min(overallCap, 68);
-
-    if (overallCap < 100) {
-      overallCapApplied = overallCap;
-      overallScore = Math.min(overallScore, overallCap);
-    }
-
-    overallScore = clamp(Math.round(overallScore), 0, 100);
-
-    const detectedPhotoCount = photoData.photoCount;
-    const detectedReviewCount = trustData.reviewCount;
-    const detectedRating = trustData.rating;
-
-    const scoreLabel = getOverallLabel(overallScore);
-
-    const summaryPayload = buildCategoryMessages({
-      titleScore,
-      descriptionScore,
-      photoScore,
-      amenityScore,
-      trustScore,
-      marketScore,
-      detectedPhotoCount,
-      detectedReviewCount,
-      detectedRating,
-      penaltiesApplied,
-      overallCapApplied,
-    });
-
-    const topFixes = buildTopFixes({
-      overallScore,
-      photoScore,
-      trustScore,
-      amenityScore,
-      titleScore,
-      descriptionScore,
-      marketScore,
-    });
-
-    const signalsPayload = {
-      extracted_fields: {
-        title: property.title || "",
-        reviews: property.reviews ?? null,
-        rating: property.rating ?? null,
-        photos_detected: detectedPhotoCount,
-      },
-      title: {
-        length: String(property.title || "").trim().length,
-        caps_ratio: capsRatio(property.title || ""),
-        emoji_count: countEmojis(property.title || ""),
-      },
-      description: {
-        length: stripHtml(property.description || "").length,
-        has_distance_signal:
-          countRegexMatches(
-            stripHtml(property.description || ""),
-            DESCRIPTION_RULES.distanceRegexes
-          ) > 0,
-        claims_without_support: descriptionData.claimsWithoutSupport,
-      },
-      photos: {
-        detected_count: photoData.photoCount,
-        room_signals: photoData.roomSignals,
-      },
-      amenities: {
-        amenity_count: amenityData.amenityCount,
-        practical_hits: amenityData.practicalHits,
-        practical_missing_count: amenityData.practicalMissingCount,
-        mismatch_flags: amenityData.mismatchFlags,
-        essential_missing: amenityData.essentialMissing,
-        missing_basic_penalties: amenityData.missingBasicPenalties,
-        amenity_count_cap: amenityData.amenityCountCap,
-        guest_fit_signals: amenityData.guestFitSignals,
-        breakdown: amenityData.breakdown,
-      },
-      trust: {
-        review_volume_score: trustData.reviewVolumeScore,
-        rating_score: trustData.ratingScore,
-        host_score: trustData.hostScore,
-        safety_score: trustData.safetyScore,
-        safety_flags: trustData.safetyFlags,
-      },
-      penalties: penaltiesApplied,
-      overall_cap_applied: overallCapApplied,
-    };
-
-    const { error: scoreInsertError } = await supabase.from("listing_scores").insert([
-      {
-        submission_id: submission.id,
-        scoring_version: SCORING_VERSION,
-        overall_score: overallScore,
-        score_label: scoreLabel,
-        title_score: titleScore,
-        description_score: descriptionScore,
-        photo_score: photoData.score,
-        amenity_score: amenityScore,
-        trust_score: trustScore,
-        market_score: marketScore,
-        summary: JSON.stringify({
-          ...summaryPayload,
-          signals: signalsPayload,
-        }),
-        top_fixes: topFixes,
-        detected_photo_count: detectedPhotoCount,
-        detected_review_count: detectedReviewCount,
-        detected_rating: detectedRating,
-        scored_at: new Date().toISOString(),
-      },
-    ]);
-
-    if (scoreInsertError) {
-      console.error("Score insert error:", scoreInsertError);
-      return res.status(500).json({ error: "Failed to store score" });
-    }
-
-    const { error: submissionUpdateError } = await supabase
-      .from("listing_submissions")
-      .update({
-        status: "complete",
-        status_message: "Scoring complete",
-      })
-      .eq("id", submission.id);
-
-    if (submissionUpdateError) {
-      console.error("Submission update error:", submissionUpdateError);
-      return res.status(500).json({
-        error: "Score saved but failed to update submission status",
-      });
-    }
+    const { property, marketData } = req.body; // assuming you're passing data in request body
+    const overallScore = calculateFinalScore(property, marketData);
 
     return res.status(200).json({
       success: true,
-      submission_id: submission.id,
-      job_id: submission.job_id,
-      overall_score: overallScore,
-      score_label: scoreLabel,
-      detected_signals: {
-        photos: detectedPhotoCount,
-        reviews: detectedReviewCount,
-        rating: detectedRating,
-      },
+      overallScore,
     });
   } catch (e) {
-    console.error("Unhandled error in score-next:", e);
-    return res.status(500).json({ error: "Server error" });
+    return res.status(500).json({
+      error: e.message || "Server error",
+    });
   }
 }
