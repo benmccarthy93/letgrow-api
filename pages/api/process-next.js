@@ -6,6 +6,8 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET;
 const HASDATA_API_KEY = process.env.HASDATA_API_KEY;
 const HASDATA_PROPERTY_API_URL = process.env.HASDATA_PROPERTY_API_URL;
+const AIRROI_API_KEY = process.env.AIRROI_API_KEY;
+const AIRROI_RATES_URL = "https://api.airroi.com/listings/future/rates";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
@@ -561,6 +563,52 @@ async function fetchHasDataProperty(normalisedUrl) {
   };
 }
 
+async function fetchAirRoiFutureRates(airbnbListingId) {
+  if (!AIRROI_API_KEY) {
+    return { ok: false, status: 0, requestUrl: null, raw: { error: "Missing AIRROI_API_KEY env var" } };
+  }
+
+  if (!airbnbListingId) {
+    return { ok: false, status: 0, requestUrl: null, raw: { error: "No airbnb_listing_id available" } };
+  }
+
+  const requestUrl = `${AIRROI_RATES_URL}?${new URLSearchParams({
+    id: String(airbnbListingId),
+    currency: "native",
+  }).toString()}`;
+
+  try {
+    const response = await fetch(requestUrl, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "x-api-key": AIRROI_API_KEY,
+      },
+    });
+
+    let raw;
+    try {
+      raw = await response.json();
+    } catch {
+      raw = { error: "Non-JSON response from AirROI" };
+    }
+
+    return {
+      ok: response.ok,
+      status: response.status,
+      requestUrl,
+      raw,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      requestUrl,
+      raw: { error: err.message || "AirROI fetch threw an exception" },
+    };
+  }
+}
+
 async function triggerScoreNext(req, jobId) {
   const baseUrl = getBaseUrl(req);
 
@@ -922,6 +970,23 @@ export default async function handler(req, res) {
           success: false,
           error: "Failed to store listing snapshot",
         });
+      }
+    }
+
+    // Fetch AirROI future rates data (non-blocking — failure doesn't stop the pipeline)
+    if (submission.airbnb_listing_id) {
+      try {
+        const airRoiResult = await fetchAirRoiFutureRates(submission.airbnb_listing_id);
+
+        await insertFetchRow({
+          submissionId: submission.id,
+          fetchStatus: airRoiResult.ok ? "success" : "failed",
+          provider: "airroi",
+          requestUrl: airRoiResult.requestUrl,
+          rawResponse: airRoiResult.raw,
+        });
+      } catch (airRoiError) {
+        console.error("AirROI fetch error (non-blocking):", airRoiError);
       }
     }
 
