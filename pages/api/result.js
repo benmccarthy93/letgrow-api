@@ -51,7 +51,8 @@ function safeJsonParse(value) {
 function mapSubmissionStatus(status) {
     const s = String(status || "").toLowerCase()
 
-    if (["complete", "scored", "done"].includes(s)) return "complete"
+    if (["complete", "done"].includes(s)) return "complete"
+    if (["scored"].includes(s)) return "analysing"
     if (["failed", "error"].includes(s)) return "error"
 
     return "loading"
@@ -202,7 +203,23 @@ export default async function handler(req, res) {
             })
         }
 
+        const tier = submission.tier || "free"
         const state = mapSubmissionStatus(submission.status)
+
+        if (state === "analysing") {
+            return res.status(200).json({
+                success: true,
+                job_id: submission.job_id,
+                submission_id: submission.id,
+                status: "loading",
+                tier,
+                status_message: "Your score is ready — generating your full expert analysis...",
+                steps: [
+                    ...buildLoadingSteps("complete"),
+                    { key: "analysing", label: "Generating expert analysis and recommendations", done: false },
+                ],
+            })
+        }
 
         if (state === "loading") {
             return res.status(200).json({
@@ -257,19 +274,55 @@ export default async function handler(req, res) {
         const messages = normaliseMessages(scoreRow.summary, scoreRow.overall_score)
         const proofSignals = extractProofSignals(scoreRow, scoreRow.summary)
 
+        const result = {
+            overall_score: scoreRow.overall_score,
+            score_label: scoreRow.score_label,
+            messages,
+            proof_signals: proofSignals,
+            scored_at: scoreRow.scored_at,
+            scoring_version: scoreRow.scoring_version,
+        }
+
+        // For pro/premium tiers, include analysis data
+        if (tier === "pro" || tier === "premium") {
+            const { data: analysisRow } = await supabase
+                .from("listing_analyses")
+                .select("*")
+                .eq("submission_id", submission.id)
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle()
+
+            if (analysisRow && analysisRow.status === "complete") {
+                result.pro_analysis = {
+                    rewritten_title: analysisRow.rewritten_title,
+                    rewritten_title_score: analysisRow.rewritten_title_score,
+                    rewritten_description: analysisRow.rewritten_description,
+                    rewritten_description_score: analysisRow.rewritten_description_score,
+                    rewritten_your_property: analysisRow.rewritten_your_property,
+                    original_title_score: analysisRow.original_title_score,
+                    original_description_score: analysisRow.original_description_score,
+                    review_themes: analysisRow.review_themes,
+                    strengths: analysisRow.strengths,
+                    revenue_leaks: analysisRow.revenue_leaks,
+                    instant_fixes: analysisRow.instant_fixes,
+                    overall_improvements: analysisRow.overall_improvements,
+                    seven_day_plan: analysisRow.seven_day_plan,
+                    click_through_suggestions: analysisRow.click_through_suggestions,
+                    amenity_suggestions: analysisRow.amenity_suggestions,
+                    positioning_summary: analysisRow.positioning_summary,
+                    analysed_at: analysisRow.analysed_at,
+                }
+            }
+        }
+
         return res.status(200).json({
             success: true,
             job_id: submission.job_id,
             submission_id: submission.id,
             status: "complete",
-            result: {
-                overall_score: scoreRow.overall_score,
-                score_label: scoreRow.score_label,
-                messages,
-                proof_signals: proofSignals,
-                scored_at: scoreRow.scored_at,
-                scoring_version: scoreRow.scoring_version,
-            },
+            tier,
+            result,
         })
     } catch (error) {
         console.error("Unhandled error in result endpoint:", error)

@@ -144,7 +144,7 @@ export default async function handler(req, res) {
       });
     }
 
-    const { name, email, listing_url, marketing_consent } = req.body || {};
+    const { name, email, listing_url, marketing_consent, tier: requestedTier } = req.body || {};
 
     if (!name || !email || !listing_url) {
       return res.status(400).json({
@@ -170,6 +170,9 @@ export default async function handler(req, res) {
       });
     }
 
+    const validTiers = ["free", "pro", "premium"];
+    const tier = validTiers.includes(requestedTier) ? requestedTier : "free";
+
     const marketingConsentBool = parseMarketingConsent(marketing_consent);
 
     if (!marketingConsentBool) {
@@ -185,7 +188,7 @@ export default async function handler(req, res) {
       full_name: trimmedName,
       email: trimmedEmail,
       airbnb_url: trimmedListingUrl,
-      tier: "free",
+      tier,
       status: "pending",
       status_message: "Submission received",
       source: "website",

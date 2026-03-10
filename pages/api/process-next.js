@@ -204,7 +204,7 @@ function extractReviewExcerpts(raw) {
   for (const candidate of reviewCandidates) {
     if (Array.isArray(candidate)) {
       return candidate
-        .slice(0, 10)
+        .slice(0, 50)
         .map((item) => {
           if (typeof item === "string") {
             return { text: item };
