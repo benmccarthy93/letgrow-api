@@ -8,7 +8,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
 });
 
-const SCORING_VERSION = "v4_weighted_buckets";
+const SCORING_VERSION = "v5_competitive_rates";
 
 // -----------------------------
 // Helpers
@@ -178,12 +178,12 @@ function countKeywordMatches(text) {
 // Bucket weights (percentage of 100)
 // -----------------------------
 const BUCKET_WEIGHTS = {
-    title: 15,
-    description: 15,
+    title: 10,
+    description: 10,
     photos: 10,
     amenities: 10,
     trust: 30,
-    competitive: 20,
+    competitive: 30,
 };
 
 // -----------------------------
@@ -403,68 +403,199 @@ function scoreTrust(property, amenityTitles) {
 }
 
 // -----------------------------
-// 6. Competitive Positioning (internal max 30, scored harshly)
+// 6. Competitive Positioning (internal max 85, based on AirROI rates data)
 // -----------------------------
-function scoreCompetitivePositioning(property, amenityData, photoData) {
-    const titleLower = String(property?.title || "").toLowerCase();
-    const descriptionClean = stripHtml(property?.description || "");
-    const descriptionLower = descriptionClean.toLowerCase();
-    const amenityTitles = amenityData.amenityTitles || [];
+function scoreCompetitivePositioning(ratesData) {
+    const rates = Array.isArray(ratesData) ? ratesData : [];
+    const signals = {};
+    let total = 0;
 
-  const guestFitPhrases = ["family", "families", "couples", "couple", "business", "corporate", "groups", "group stay", "remote work", "contractor", "contractors", "ideal for", "perfect for", "great for"];
-    const guestFitMatches = guestFitPhrases.filter((p) => descriptionLower.includes(p)).length;
-    let guestFitScore = 0;
-    if (guestFitMatches >= 3) guestFitScore = 5;
-    else if (guestFitMatches >= 2) guestFitScore = 3;
-    else if (guestFitMatches >= 1) guestFitScore = 1;
-
-  const practicalPhrases = ["free parking", "parking", "self check-in", "self check in", "wifi", "wi-fi", "workspace", "washer", "dryer", "kitchen", "heating", "air conditioning"];
-    const practicalMatches = practicalPhrases.filter((p) => descriptionLower.includes(p)).length;
-    let practicalScore = 0;
-    if (practicalMatches >= 5) practicalScore = 5;
-    else if (practicalMatches >= 3) practicalScore = 3;
-    else if (practicalMatches >= 1) practicalScore = 1;
-
-  const diffPhrases = ["hot tub", "sauna", "pool", "jacuzzi", "sea view", "river view", "lake view", "mountain view", "fireplace", "garden", "balcony", "terrace", "beachfront", "waterfront", "penthouse", "ev charger", "pet friendly", "pet-friendly", "dog friendly"];
-    const diffInTitle = diffPhrases.filter((p) => titleLower.includes(p)).length;
-    const diffInDesc = diffPhrases.filter((p) => descriptionLower.includes(p)).length;
-    const totalDiff = diffInTitle + diffInDesc;
-    let diffScore = 0;
-    if (totalDiff >= 4) diffScore = 6;
-    else if (totalDiff >= 3) diffScore = 4;
-    else if (totalDiff >= 2) diffScore = 2;
-    else if (totalDiff >= 1) diffScore = 1;
-
-  const consistencyChecks = [
-    { mentioned: ["parking", "free parking"], amenity: ["parking", "free parking"] },
-    { mentioned: ["wifi", "wi-fi", "fast wifi"], amenity: ["wifi", "wi-fi"] },
-    { mentioned: ["workspace", "desk"], amenity: ["workspace", "dedicated workspace", "desk"] },
-    { mentioned: ["self check-in", "self check in"], amenity: ["self check-in", "self check in", "lockbox", "smart lock", "keypad"] },
-    { mentioned: ["washer", "washing machine"], amenity: ["washer", "washing machine"] },
-    { mentioned: ["kitchen"], amenity: ["kitchen"] },
-      ];
-    let mismatchCount = 0;
-    for (const check of consistencyChecks) {
-          const mentioned = check.mentioned.some((p) => descriptionLower.includes(p));
-          const backed = hasAmenity(amenityTitles, check.amenity);
-          if (mentioned && !backed) mismatchCount++;
+    if (rates.length === 0) {
+        return { score: 0, internal: 0, max: 85, noData: true, signals };
     }
-    let consistencyScore = clamp(6 - mismatchCount * 2, 0, 6);
 
-  const hasWorkspace = hasAmenity(amenityTitles, ["workspace", "dedicated workspace", "desk"]);
-    const hasWifi = hasAmenity(amenityTitles, ["wifi", "wi-fi"]);
-    let workScore = 0;
-        if (hasWorkspace && hasWifi) workScore = 4;
-    else if (hasWorkspace || hasWifi) workScore = 2;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-  let photoStrengthScore = 0;
-    if (photoData.photoCount >= 30) photoStrengthScore = 4;
-    else if (photoData.photoCount >= 20) photoStrengthScore = 3;
-    else if (photoData.photoCount >= 15) photoStrengthScore = 1;
+    // Helper: get rates within a day range from today
+    function ratesInRange(startDay, endDay) {
+        return rates.filter((r) => {
+            const d = new Date(r.date);
+            const diffDays = Math.round((d - today) / (1000 * 60 * 60 * 24));
+            return diffDays >= startDay && diffDays < endDay;
+        });
+    }
 
-  const internal = clamp(guestFitScore + practicalScore + diffScore + consistencyScore + workScore + photoStrengthScore, 0, 30);
+    // Helper: availability percentage (ratio of available days)
+    function availabilityPct(subset) {
+        if (subset.length === 0) return 1;
+        const available = subset.filter((r) => r.available).length;
+        return available / subset.length;
+    }
 
-  return { score: internal, internal, max: 30, guestFitScore, practicalScore, diffScore, consistencyScore, mismatchCount, workScore, photoStrengthScore };
+    // Get priced days (available with a rate)
+    const pricedDays = rates.filter((r) => r.available && r.rate != null && r.rate > 0);
+
+    // --- Weekend price uplift ---
+    const weekdays = pricedDays.filter((r) => {
+        const day = new Date(r.date).getDay();
+        return day >= 1 && day <= 4; // Mon-Thu
+    });
+    const weekends = pricedDays.filter((r) => {
+        const day = new Date(r.date).getDay();
+        return day === 0 || day === 5 || day === 6; // Fri, Sat, Sun
+    });
+    const avgWeekday = weekdays.length > 0 ? weekdays.reduce((s, r) => s + r.rate, 0) / weekdays.length : 0;
+    const avgWeekend = weekends.length > 0 ? weekends.reduce((s, r) => s + r.rate, 0) / weekends.length : 0;
+    const hasWeekendUplift = avgWeekday > 0 && avgWeekend > avgWeekday * 1.05;
+    signals.weekendPriceUplift = hasWeekendUplift ? 5 : 0;
+    total += signals.weekendPriceUplift;
+
+    // --- Event price spikes (any day with rate > 2x the median) ---
+    const sortedRates = pricedDays.map((r) => r.rate).sort((a, b) => a - b);
+    const median = sortedRates.length > 0 ? sortedRates[Math.floor(sortedRates.length / 2)] : 0;
+    const hasPriceSpikes = median > 0 && pricedDays.some((r) => r.rate > median * 2);
+    signals.eventPriceSpikes = hasPriceSpikes ? 5 : 0;
+    total += signals.eventPriceSpikes;
+
+    // --- Seasonal pricing shifts (compare monthly ADR across available months) ---
+    const monthlyAdr = {};
+    for (const r of pricedDays) {
+        const month = r.date.slice(0, 7); // yyyy-MM
+        if (!monthlyAdr[month]) monthlyAdr[month] = { sum: 0, count: 0 };
+        monthlyAdr[month].sum += r.rate;
+        monthlyAdr[month].count++;
+    }
+    const monthAvgs = Object.values(monthlyAdr).map((m) => m.sum / m.count);
+    const hasSeasonalShifts = monthAvgs.length >= 2 && (Math.max(...monthAvgs) / Math.min(...monthAvgs)) > 1.15;
+    signals.seasonalPricingShifts = hasSeasonalShifts ? 5 : 0;
+    total += signals.seasonalPricingShifts;
+
+    // --- Flat pricing detection (same price across entire calendar) ---
+    const uniqueRates = new Set(pricedDays.map((r) => r.rate));
+    const isFlatPricing = pricedDays.length >= 10 && uniqueRates.size <= 2;
+    signals.flatPricingDetection = isFlatPricing ? -20 : 0;
+    total += signals.flatPricingDetection;
+
+    // --- Availability windows ---
+    const avail0to10 = ratesInRange(0, 10);
+    const avail10to20 = ratesInRange(10, 20);
+    const avail20to30 = ratesInRange(20, 30);
+    const avail30to60 = ratesInRange(30, 60);
+
+    const pct0to10 = availabilityPct(avail0to10);
+    if (pct0to10 < 0.25) signals.avail0to10 = 20;
+    else if (pct0to10 <= 0.50) signals.avail0to10 = -10;
+    else signals.avail0to10 = -25;
+    total += signals.avail0to10;
+
+    const pct10to20 = availabilityPct(avail10to20);
+    if (pct10to20 < 0.25) signals.avail10to20 = 20;
+    else if (pct10to20 <= 0.50) signals.avail10to20 = 5;
+    else signals.avail10to20 = -20;
+    total += signals.avail10to20;
+
+    const pct20to30 = availabilityPct(avail20to30);
+    if (pct20to30 < 0.25) signals.avail20to30 = 5;
+    else if (pct20to30 <= 0.50) signals.avail20to30 = -5;
+    else signals.avail20to30 = -15;
+    total += signals.avail20to30;
+
+    const pct30to60 = availabilityPct(avail30to60);
+    if (pct30to60 < 0.50) signals.avail30to60 = 5;
+    else signals.avail30to60 = -5;
+    total += signals.avail30to60;
+
+    // --- Long gaps in calendar (7+ consecutive available days) ---
+    const sortedByDate = [...rates].sort((a, b) => a.date.localeCompare(b.date));
+    let maxConsecutiveAvailable = 0;
+    let currentStreak = 0;
+    for (const r of sortedByDate) {
+        if (r.available) {
+            currentStreak++;
+            if (currentStreak > maxConsecutiveAvailable) maxConsecutiveAvailable = currentStreak;
+        } else {
+            currentStreak = 0;
+        }
+    }
+    const hasLongGaps = maxConsecutiveAvailable >= 7;
+    signals.longGaps = hasLongGaps ? -20 : 0;
+    total += signals.longGaps;
+
+    // --- Price volatility (std deviation >= 35% of mean) ---
+    if (pricedDays.length >= 5) {
+        const mean = pricedDays.reduce((s, r) => s + r.rate, 0) / pricedDays.length;
+        const variance = pricedDays.reduce((s, r) => s + Math.pow(r.rate - mean, 2), 0) / pricedDays.length;
+        const stdDev = Math.sqrt(variance);
+        const isVolatile = mean > 0 && (stdDev / mean) >= 0.35;
+        signals.priceVolatility = isVolatile ? 5 : 0;
+    } else {
+        signals.priceVolatility = 0;
+    }
+    total += signals.priceVolatility;
+
+    // --- Weekend availability (over 50% weekends open within next 30 days) ---
+    const next30 = ratesInRange(0, 30);
+    const weekendDaysNext30 = next30.filter((r) => {
+        const day = new Date(r.date).getDay();
+        return day === 0 || day === 5 || day === 6;
+    });
+    const weekendAvailPct = weekendDaysNext30.length > 0
+        ? weekendDaysNext30.filter((r) => r.available).length / weekendDaysNext30.length
+        : 0;
+    signals.weekendAvailability = weekendAvailPct > 0.50 ? -10 : 0;
+    total += signals.weekendAvailability;
+
+    // --- Minimum stay ---
+    const minNightsValues = rates
+        .filter((r) => r.min_nights != null && r.min_nights > 0)
+        .map((r) => r.min_nights);
+    const avgMinNights = minNightsValues.length > 0
+        ? minNightsValues.reduce((s, n) => s + n, 0) / minNightsValues.length
+        : null;
+
+    if (avgMinNights === null) {
+        signals.minimumStay = 0;
+    } else if (avgMinNights <= 1) {
+        signals.minimumStay = 15;
+    } else if (avgMinNights <= 2) {
+        signals.minimumStay = 5;
+    } else if (avgMinNights <= 5) {
+        signals.minimumStay = 0;
+    } else if (avgMinNights <= 7) {
+        signals.minimumStay = -10;
+    } else {
+        signals.minimumStay = -20;
+    }
+    total += signals.minimumStay;
+
+    // Internal max is 85 (sum of all best-case positive signals)
+    const internal = clamp(total, 0, 85);
+
+    return {
+        score: internal,
+        internal,
+        max: 85,
+        noData: false,
+        signals,
+        meta: {
+            totalRateDays: rates.length,
+            pricedDays: pricedDays.length,
+            avgWeekday: Number(avgWeekday.toFixed(2)),
+            avgWeekend: Number(avgWeekend.toFixed(2)),
+            medianRate: median,
+            uniqueRateCount: uniqueRates.size,
+            avgMinNights: avgMinNights !== null ? Number(avgMinNights.toFixed(1)) : null,
+            maxConsecutiveAvailable,
+            availPct: {
+                next10: Number(pct0to10.toFixed(2)),
+                next10to20: Number(pct10to20.toFixed(2)),
+                next20to30: Number(pct20to30.toFixed(2)),
+                next30to60: Number(pct30to60.toFixed(2)),
+            },
+            weekendAvailPctNext30: Number(weekendAvailPct.toFixed(2)),
+        },
+    };
 }
 
 // -----------------------------
@@ -510,15 +641,15 @@ function buildCategoryMessages(breakdown) {
           category_messages: [
             {
                       category: "Title Strength",
-                      weight: "15%",
+                      weight: "10%",
                       score: breakdown.title,
-                      message: breakdown.title <= 3 ? "Your title looks weak or too generic, which may be limiting clicks before guests even open the listing." : breakdown.title <= 7 ? "Your title is readable, but it feels fairly ordinary and may not be surfacing the strongest reasons to book." : breakdown.title <= 11 ? "Your title is reasonably clear and useful, though it may still be underselling the most compelling parts of the stay." : "Your title is doing a good job of signalling value, clarity and guest relevance.",
+                      message: breakdown.title <= 2 ? "Your title looks weak or too generic, which may be limiting clicks before guests even open the listing." : breakdown.title <= 5 ? "Your title is readable, but it feels fairly ordinary and may not be surfacing the strongest reasons to book." : breakdown.title <= 8 ? "Your title is reasonably clear and useful, though it may still be underselling the most compelling parts of the stay." : "Your title is doing a good job of signalling value, clarity and guest relevance.",
             },
             {
                       category: "Description Strength",
-                      weight: "15%",
+                      weight: "10%",
                       score: breakdown.description,
-                      message: breakdown.description <= 3 ? "Your description looks thin or too vague, so guests may not be getting enough confidence from it." : breakdown.description <= 7 ? "Your description covers some basics, but the opening may be too slow or too generic to sell the stay well." : breakdown.description <= 11 ? "Your description is reasonably specific and useful, though the value could be surfaced faster and more clearly." : "Your description is doing a good job of explaining the stay in a clear and persuasive way.",
+                      message: breakdown.description <= 2 ? "Your description looks thin or too vague, so guests may not be getting enough confidence from it." : breakdown.description <= 5 ? "Your description covers some basics, but the opening may be too slow or too generic to sell the stay well." : breakdown.description <= 8 ? "Your description is reasonably specific and useful, though the value could be surfaced faster and more clearly." : "Your description is doing a good job of explaining the stay in a clear and persuasive way.",
             },
             {
                       category: "Photo Strength",
@@ -540,9 +671,9 @@ function buildCategoryMessages(breakdown) {
             },
             {
                       category: "Competitive Positioning",
-                      weight: "20%",
+                      weight: "30%",
                       score: breakdown.competitive,
-                      message: breakdown.competitive <= 4 ? "Your listing positioning looks quite generic, so it may not be clearly telling the right guests why they should choose it." : breakdown.competitive <= 8 ? "Your listing shows some positioning, but it still feels ordinary and may not be standing out enough." : breakdown.competitive <= 14 ? "Your listing has decent practical value and guest fit, though the edge over competing listings could be sharper." : "Your listing shows strong differentiation and is doing a good job of communicating who it suits.",
+                      message: breakdown.competitive <= 6 ? "Your pricing and availability signals suggest the listing may not be competing effectively — flat pricing, wide-open calendars, or high minimum stays could be holding it back." : breakdown.competitive <= 12 ? "Your pricing shows some variation but there are still gaps in dynamic pricing or availability management that may be costing bookings." : breakdown.competitive <= 22 ? "Your pricing strategy and availability look reasonably strong, though sharper weekend uplift, seasonal adjustments, or tighter availability windows could improve performance." : "Your listing shows strong competitive pricing signals — good dynamic pricing, tight availability, and smart minimum stay settings.",
             },
                 ],
     };
@@ -564,7 +695,7 @@ function buildTopFixes(overall, breakdown) {
                 if (g.key === "amenities") priorities.push("Close practical amenity gaps — check the missing amenities list and add what you can.");
                 if (g.key === "title") priorities.push("Rewrite the title to include more keywords — property type, location, and key amenities.");
                 if (g.key === "description") priorities.push("Expand the description with more practical details, keywords, and guest-relevant information.");
-                if (g.key === "competitive") priorities.push("Sharpen guest fit and differentiation — make it clear who the listing is for and what makes it special.");
+                if (g.key === "competitive") priorities.push("Improve pricing strategy — add weekend uplift, seasonal variation, and tighten your availability windows to signal demand.");
         }
   }
 
@@ -634,13 +765,34 @@ export default async function handler(req, res) {
                 return res.status(400).json({ error: "Could not extract property payload from fetch row", submission_id: submission.id, job_id: submission.job_id });
         }
 
+      // Fetch AirROI rates data for competitive positioning
+      let airRoiRates = [];
+      const { data: airRoiFetchRow, error: airRoiFetchError } = await supabase
+          .from("listing_fetches")
+          .select("raw_response")
+          .eq("submission_id", submission.id)
+          .eq("provider", "airroi")
+          .eq("fetch_status", "success")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+      if (!airRoiFetchError && airRoiFetchRow?.raw_response) {
+          const rawRates = airRoiFetchRow.raw_response;
+          if (Array.isArray(rawRates?.rates)) {
+              airRoiRates = rawRates.rates;
+          } else if (Array.isArray(rawRates)) {
+              airRoiRates = rawRates;
+          }
+      }
+
       // Run all scoring buckets
       const titleData = scoreTitle(property.title);
         const amenityData = scoreAmenities(property);
         const descriptionData = scoreDescription(property.description);
         const photoData = scorePhotos(property);
         const trustData = scoreTrust(property, amenityData.amenityTitles);
-        const competitiveData = scoreCompetitivePositioning(property, amenityData, photoData);
+        const competitiveData = scoreCompetitivePositioning(airRoiRates);
 
       // Calculate weighted overall score
       const { overall: overallScore, breakdown } = calculateOverallScore(titleData, descriptionData, photoData, amenityData, trustData, competitiveData);
@@ -662,7 +814,7 @@ export default async function handler(req, res) {
               photos: { internal: photoData.internal, max: photoData.max, photoCount: photoData.photoCount },
               amenities: { internal: amenityData.internal, max: amenityData.max, amenityCount: amenityData.amenityCount, countBonus: amenityData.countBonus, itemScore: amenityData.itemScore, present: amenityData.present, missing: amenityData.missing },
               trust: { internal: trustData.internal, max: trustData.max, reviewVolumeScore: trustData.reviewVolumeScore, ratingScore: trustData.ratingScore, superhostScore: trustData.superhostScore, yearsHosting: trustData.yearsHosting, yearsActiveScore: trustData.yearsActiveScore, responseTimeScore: trustData.responseTimeScore, safetyDeduction: trustData.safetyDeduction },
-              competitive: { internal: competitiveData.internal, max: competitiveData.max, guestFitScore: competitiveData.guestFitScore, practicalScore: competitiveData.practicalScore, diffScore: competitiveData.diffScore, consistencyScore: competitiveData.consistencyScore, mismatchCount: competitiveData.mismatchCount, workScore: competitiveData.workScore, photoStrengthScore: competitiveData.photoStrengthScore },
+              competitive: { internal: competitiveData.internal, max: competitiveData.max, noData: competitiveData.noData, signals: competitiveData.signals, meta: competitiveData.meta },
       };
 
       const { error: scoreInsertError } = await supabase.from("listing_scores").insert([
