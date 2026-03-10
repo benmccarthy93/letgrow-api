@@ -446,7 +446,7 @@ function scoreTrust(property, amenityTitles) {
 }
 
 // -----------------------------
-// 6. Competitive Positioning (internal max 90, based on AirROI rates data)
+// 6. Competitive Positioning (internal max 80, based on AirROI rates data)
 // -----------------------------
 function scoreCompetitivePositioning(ratesData) {
     const rates = Array.isArray(ratesData) ? ratesData : [];
@@ -454,7 +454,7 @@ function scoreCompetitivePositioning(ratesData) {
     let total = 0;
 
     if (rates.length === 0) {
-        return { score: 0, internal: 0, max: 90, noData: true, signals };
+        return { score: 0, internal: 0, max: 80, noData: true, signals };
     }
 
     const today = new Date();
@@ -534,8 +534,8 @@ function scoreCompetitivePositioning(ratesData) {
     total += signals.avail1to5;
 
     const pct5to10 = availabilityPct(avail5to10);
-    if (pct5to10 < 0.25) signals.avail5to10 = 20;
-    else if (pct5to10 <= 0.50) signals.avail5to10 = -10;
+    if (pct5to10 < 0.25) signals.avail5to10 = 10;
+    else if (pct5to10 <= 0.50) signals.avail5to10 = -5;
     else signals.avail5to10 = -20;
     total += signals.avail5to10;
 
@@ -619,13 +619,13 @@ function scoreCompetitivePositioning(ratesData) {
     }
     total += signals.minimumStay;
 
-    // Internal max is 85 (sum of all best-case positive signals)
-    const internal = clamp(total, 0, 90);
+    // Internal max is 80 (sum of all best-case positive signals)
+    const internal = clamp(total, 0, 80);
 
     return {
         score: internal,
         internal,
-        max: 90,
+        max: 80,
         noData: false,
         signals,
         meta: {
