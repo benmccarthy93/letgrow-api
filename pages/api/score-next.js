@@ -373,11 +373,11 @@ function scoreAmenities(property) {
         }
   }
 
-  // If any parking type is present, don't penalise for missing other parking types
-  const parkingKeys = ["free_parking", "free_street_parking", "paid_parking"];
-  const hasAnyParking = parkingKeys.some(k => present.includes(k));
-  if (hasAnyParking) {
-        for (const pk of parkingKeys) {
+  // If any free parking type is present, don't penalise for missing the other free parking type
+  const freeParkingKeys = ["free_parking", "free_street_parking"];
+  const hasAnyFreeParking = freeParkingKeys.some(k => present.includes(k));
+  if (hasAnyFreeParking) {
+        for (const pk of freeParkingKeys) {
                 if (missing.includes(pk)) {
                         const entry = AMENITY_SCORING_TABLE.find(a => a.key === pk);
                         if (entry) {
@@ -691,9 +691,9 @@ function buildTitleMessage(weightedScore, maxWeight, data) {
         issues.push("it contains only a small number of the search-relevant terms that typically help listings get found and clicked on");
     }
     if (issues.length === 0) {
-        return "Your title has some strengths but isn't performing at the level where it actively drives clicks. The difference between an average title and a high-performing one is often subtle — but the impact on daily traffic can be significant. An SEO-optimised title with the right keywords can significantly increase your visibility in search results — this is something our experts can help with.";
+        return "Your title has some strengths but isn't performing at the level where it actively drives clicks. The difference between an average title and a high-performing one is often subtle — but the impact on daily traffic can be significant. An SEO-optimised title with the right keywords can significantly increase your visibility in search results.";
     }
-    return `Your title is underperforming — ${joinList(issues)}. Your title is the very first thing a guest sees in search results, and weaknesses here quietly cost you clicks every single day. A professionally rewritten, SEO-optimised title tailored to your property and market can make a real difference — this is something our experts can help with.`;
+    return `Your title is underperforming — ${joinList(issues)}. Your title is the very first thing a guest sees in search results, and weaknesses here quietly cost you clicks every single day. A professionally rewritten, SEO-optimised title tailored to your property and market can make a real difference.`;
 }
 
 function buildDescriptionMessage(weightedScore, maxWeight, data) {
@@ -712,9 +712,9 @@ function buildDescriptionMessage(weightedScore, maxWeight, data) {
         issues.push(`only ${data.keywordCount} relevant search terms were detected, which is below the threshold where listings typically start ranking more competitively`);
     }
     if (issues.length === 0) {
-        return "Your description has some useful content but isn't working as hard as it could to convert interested guests. When the value of a stay isn't communicated quickly and clearly, guests tend to keep scrolling. A structured, keyword-rich description written by an expert can turn browsers into bookers — this is something our team specialises in.";
+        return "Your description has some useful content but isn't working as hard as it could to convert interested guests. When the value of a stay isn't communicated quickly and clearly, guests tend to keep scrolling. A structured, keyword-rich description can turn browsers into bookers.";
     }
-    return `Your description is leaving performance on the table — ${joinList(issues)}. A weak description doesn't just lose bookings — it also affects how Airbnb ranks and surfaces your listing against competitors. A professionally rewritten, SEO-optimised description can significantly improve both your search ranking and conversion rate — our experts can help with this.`;
+    return `Your description is leaving performance on the table — ${joinList(issues)}. A weak description doesn't just lose bookings — it also affects how Airbnb ranks and surfaces your listing against competitors. A professionally rewritten, SEO-optimised description can significantly improve both your search ranking and conversion rate.`;
 }
 
 function buildPhotoMessage(weightedScore, maxWeight, data) {
@@ -773,7 +773,7 @@ function buildTrustMessage(weightedScore, maxWeight, data) {
     } else if (data.safetyDeduction < 0) {
         issues.push("at least one key safety feature appears to be missing or unlisted");
     }
-    const upsell = " Improving your trust profile takes the right strategy — from encouraging more positive reviews to optimising your response patterns. Our experts can provide hands-on guidance to help you strengthen these signals and drive more demand.";
+    const upsell = " Improving your trust profile takes the right strategy — from encouraging more positive reviews to optimising your response patterns and building the kind of profile that converts browsers into guests.";
     if (issues.length === 0) {
         return `Your trust signals are building but haven't yet reached the level where they actively work in your favour. Even small gaps here can have a disproportionate effect on your overall performance.${upsell}`;
     }
@@ -782,7 +782,7 @@ function buildTrustMessage(weightedScore, maxWeight, data) {
 }
 
 function buildCompetitiveMessage(weightedScore, maxWeight, data) {
-    const upsell = " Expert pricing strategy can help you maximise occupancy and revenue — from dynamic pricing frameworks to competitive benchmarking, our team can ensure you're not leaving money on the table.";
+    const upsell = " Expert pricing strategy can help you maximise occupancy and revenue — setting the right minimum rate, reducing calendar gaps, finding the minimum stay that attracts bookings while covering your costs, and ensuring your availability is fully utilised so you're not leaving money on the table.";
     if (weightedScore / maxWeight >= 0.8) {
         return "Your competitive positioning is strong — your pricing shows smart variation, your calendar signals demand, and your availability settings are well-calibrated. This is helping you maximise both bookings and revenue.";
     }
