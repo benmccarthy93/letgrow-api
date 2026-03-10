@@ -1,0 +1,635 @@
+// /pages/api/analyse-pro.js
+import { createClient } from "@supabase/supabase-js";
+import Anthropic from "@anthropic-ai/sdk";
+
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET;
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false },
+});
+
+const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+
+const ANALYSIS_VERSION = "v1_pro";
+
+// -----------------------------
+// Scoring rules (mirrored from score-next.js so Claude knows exactly how to beat them)
+// -----------------------------
+const TITLE_SCORING_RULES = `
+TITLE SCORING RULES (max 20 points):
+- Length points: ≥35 characters = 10pts, ≥30 characters = 5pts, <30 characters = 0pts
+- Keyword points: ≥5 keyword matches = 10pts, ≥4 = 7pts, ≥3 = 3pts, ≥2 = 1pt, <2 = 0pts
+- ALL CAPS deduction: if entire title is uppercase, -10pts
+- Final score = clamp(lengthPoints + keywordPoints - capsDeduction, 0, 20)
+
+KEYWORDS THAT COUNT (case-insensitive, partial match):
+Cities: london, manchester, birmingham, edinburgh, glasgow, liverpool, bristol, leeds, sheffield, newcastle, cardiff, nottingham, cambridge, oxford, brighton, bath, york, coventry, leicester, reading, southampton, portsmouth, dundee, aberdeen, norwich, exeter, chester, inverness
+Property types: penthouse, studio, apartment, loft, house, cottage, cabin, villa, barn, chalet, townhouse, duplex, bungalow, lodge, flat, retreat
+Location: city centre, seaside, riverside, central, quiet, countryside, mountain view, lake view, waterfront, near beach, close to public transport, beachfront, near train station
+Quality: luxury, spacious, stylish, modern, boutique, elegant, chic
+Amenities in title: hot tub, sauna, pool, free parking, free wi-fi, balcony, fireplace, garden, patio
+Guest type: family-friendly, pet-friendly, romantic getaway, business travel, city break, group stay
+Features: fully furnished, newly renovated, bright and airy, modern design, spacious living
+`;
+
+const DESCRIPTION_SCORING_RULES = `
+DESCRIPTION SCORING RULES (max 30 points):
+- Length points: >400 characters = 10pts, ≥350 = 8pts, ≥300 = 3pts, <300 = 0pts
+- Keyword points: ≥15 keyword matches = 20pts, ≥12 = 15pts, ≥10 = 10pts, ≥7 = 5pts, ≥4 = 2pts, <4 = 0pts
+- Same keyword list as title scoring (cities, property types, locations, quality, amenities, guest types, features)
+- Final score = clamp(lengthPoints + keywordPoints, 0, 30)
+
+CRITICAL: The description MUST:
+1. Be over 400 characters to get maximum length points (10pts)
+2. Naturally include at least 15 different keywords from the list to get maximum keyword points (20pts)
+3. Not be stuffed with keywords unnaturally - they must read well
+`;
+
+const AMENITY_PURCHASE_SUGGESTIONS = {
+    travel_cot: { name: "Travel cot", cost: "~£30", market: "Opens you up to families with babies/toddlers", priority: "high" },
+    high_chair: { name: "High chair", cost: "~£15-25", market: "Essential for family bookings with young children", priority: "high" },
+    hairdryer: { name: "Hairdryer", cost: "~£10-15", market: "Expected by most guests, frequently filtered for", priority: "high" },
+    co2_alarm: { name: "Carbon monoxide alarm", cost: "~£5-10", market: "Enables the safety tick even with no CO sources — builds trust", priority: "high" },
+    fire_extinguisher: { name: "Fire extinguisher", cost: "~£10-15", market: "Safety feature that boosts trust score significantly", priority: "high" },
+    first_aid_kit: { name: "First aid kit", cost: "~£5-10", market: "Cheap safety tick that reassures guests", priority: "medium" },
+    smoke_alarm: { name: "Smoke alarm", cost: "~£5-10", market: "Critical safety feature, often legally required", priority: "high" },
+    iron: { name: "Iron and ironing board", cost: "~£15-25", market: "Attracts business travellers and longer stays", priority: "medium" },
+    coffee_maker: { name: "Coffee machine (pod or filter)", cost: "~£20-40", market: "Frequently mentioned in positive reviews, adds premium feel", priority: "medium" },
+    workspace: { name: "Dedicated workspace / desk", cost: "~£30-60", market: "Opens up remote worker and business traveller market", priority: "medium" },
+    cot: { name: "Cot/crib", cost: "~£40-80", market: "Attracts families — parents actively filter for this", priority: "medium" },
+    ev_charger: { name: "EV charger", cost: "~£300-800 (installed)", market: "Growing market, significant differentiator if you have parking", priority: "low" },
+    bbq: { name: "BBQ/grill", cost: "~£30-80", market: "Great for summer bookings, garden properties, group stays", priority: "low" },
+    extra_pillows: { name: "Extra pillows and blankets", cost: "~£15-30", market: "Low cost comfort upgrade frequently praised in reviews", priority: "high" },
+    books: { name: "Books / reading material", cost: "~£0-10 (charity shop)", market: "Adds character, frequently mentioned positively", priority: "low" },
+    cooking_basics: { name: "Cooking basics (oil, salt, pepper, spices)", cost: "~£5-10", market: "Guests hate arriving to an empty kitchen", priority: "high" },
+};
+
+// -----------------------------
+// Helpers
+// -----------------------------
+function isAuthorised(req) {
+    const headerSecret = req.headers["x-internal-secret"] || req.headers["x-api-internal-secret"];
+    return INTERNAL_API_SECRET && String(headerSecret || "") === String(INTERNAL_API_SECRET);
+}
+
+function getInputValue(value) {
+    if (Array.isArray(value)) return value[0];
+    return value;
+}
+
+async function callClaude(systemPrompt, userPrompt, maxTokens = 4096) {
+    const response = await anthropic.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: maxTokens,
+        system: systemPrompt,
+        messages: [{ role: "user", content: userPrompt }],
+    });
+
+    const text = response.content
+        .filter((block) => block.type === "text")
+        .map((block) => block.text)
+        .join("");
+
+    // Extract JSON from the response (handle markdown code blocks)
+    const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (jsonMatch) {
+        return JSON.parse(jsonMatch[1].trim());
+    }
+
+    // Try parsing the whole response as JSON
+    return JSON.parse(text.trim());
+}
+
+// -----------------------------
+// Claude Call #1: Title + Description Rewrite
+// -----------------------------
+async function rewriteTitleAndDescription(listing) {
+    const systemPrompt = `You are an expert Airbnb listing copywriter and SEO specialist. Your job is to rewrite listing titles and descriptions so they score MAXIMUM points on our internal scoring system while also being genuinely compelling for guests.
+
+You MUST follow the scoring rules EXACTLY. Your rewritten title and description should score the maximum possible points.
+
+${TITLE_SCORING_RULES}
+
+${DESCRIPTION_SCORING_RULES}
+
+IMPORTANT RULES:
+1. The rewritten title MUST score 20/20 (≥35 chars + ≥5 keywords + not all caps)
+2. The rewritten description MUST score 30/30 (>400 chars + ≥15 keywords)
+3. Both must read naturally and be compelling — no keyword stuffing
+4. Preserve the property's actual features, location, and character
+5. Use British English spelling
+6. The title should lead with the strongest differentiator
+7. The description should open with a punchy hook in the first 3 lines
+8. Structure the description with clear sections, not walls of text
+
+Respond with ONLY valid JSON, no markdown code blocks.`;
+
+    const userPrompt = `Rewrite this Airbnb listing's title and description to score maximum points.
+
+CURRENT TITLE: "${listing.title || "No title"}"
+CURRENT DESCRIPTION: "${listing.description || "No description"}"
+
+PROPERTY DETAILS:
+- Type: ${listing.propertyType || "Unknown"}
+- Room type: ${listing.roomType || "Entire place"}
+- Location: ${listing.location || "Unknown"}
+- Bedrooms: ${listing.bedrooms || "Unknown"}
+- Beds: ${listing.beds || "Unknown"}
+- Bathrooms: ${listing.bathrooms || "Unknown"}
+- Max guests: ${listing.maxGuests || "Unknown"}
+- Rating: ${listing.rating || "N/A"} (${listing.reviewCount || 0} reviews)
+
+KEY AMENITIES PRESENT: ${(listing.amenitiesPresent || []).join(", ") || "None listed"}
+KEY AMENITIES MISSING: ${(listing.amenitiesMissing || []).join(", ") || "None"}
+
+Respond with this JSON structure:
+{
+  "rewritten_title": "the new title (must be ≥35 chars with ≥5 keywords)",
+  "title_keyword_count": <number of scoring keywords in new title>,
+  "title_character_count": <character count>,
+  "title_rationale": "Brief explanation of why this title scores higher and converts better",
+  "rewritten_description": "the full new description (must be >400 chars with ≥15 keywords)",
+  "description_keyword_count": <number of scoring keywords in new description>,
+  "description_character_count": <character count>,
+  "description_rationale": "Brief explanation of improvements made",
+  "before_after_summary": "One sentence summarising the key improvement"
+}`;
+
+    return callClaude(systemPrompt, userPrompt, 4096);
+}
+
+// -----------------------------
+// Claude Call #2: Review Theme Analysis
+// -----------------------------
+async function analyseReviews(reviews, listing) {
+    if (!reviews || reviews.length === 0) {
+        return {
+            positive_themes: [],
+            negative_themes: [],
+            recurring_issues: [],
+            sentiment_summary: "No reviews available for analysis.",
+            fix_suggestions: [],
+            review_count_analysed: 0,
+        };
+    }
+
+    const systemPrompt = `You are an expert at analysing Airbnb guest reviews to extract actionable insights for hosts. You identify patterns, recurring issues, and sentiment trends that can directly improve listing performance.
+
+Your analysis should be specific, actionable, and commercially focused. Not generic advice — real patterns from real reviews.
+
+Use British English spelling.
+
+Respond with ONLY valid JSON, no markdown code blocks.`;
+
+    const reviewTexts = reviews
+        .map((r, i) => {
+            const rating = r.rating ? ` (${r.rating}★)` : "";
+            const date = r.created_at ? ` [${r.created_at}]` : "";
+            return `Review ${i + 1}${rating}${date}: "${r.text || "No text"}"`;
+        })
+        .join("\n\n");
+
+    const userPrompt = `Analyse these ${reviews.length} guest reviews for an Airbnb listing.
+
+LISTING: "${listing.title}" in ${listing.location || "Unknown location"}
+RATING: ${listing.rating || "N/A"} / 5
+
+REVIEWS:
+${reviewTexts}
+
+Provide a thorough analysis with this JSON structure:
+{
+  "review_count_analysed": ${reviews.length},
+  "positive_themes": [
+    {
+      "theme": "What guests consistently praise",
+      "frequency": "How many reviews mention this",
+      "example_quote": "Direct quote from a review",
+      "leverage_suggestion": "How the host can emphasise this strength in their listing"
+    }
+  ],
+  "negative_themes": [
+    {
+      "theme": "What guests consistently complain about",
+      "frequency": "How many reviews mention this",
+      "example_quote": "Direct quote from a review",
+      "severity": "minor|moderate|major",
+      "fix_suggestions": {
+        "cheap": "Budget fix option with estimated cost",
+        "fast": "Quick fix that can be done this week",
+        "premium": "Investment-level fix for best results"
+      }
+    }
+  ],
+  "recurring_issues": [
+    {
+      "issue": "Specific recurring problem",
+      "times_mentioned": <number>,
+      "appears_resolved": false,
+      "urgency": "low|medium|high",
+      "impact_on_bookings": "How this likely affects conversion"
+    }
+  ],
+  "sentiment_summary": "2-3 sentence summary of overall guest sentiment and trends over time",
+  "expectation_gaps": [
+    "Things mentioned in reviews that are NOT addressed in the listing description"
+  ],
+  "review_response_suggestions": [
+    "Specific suggestions for how the host should respond to common review themes"
+  ]
+}
+
+Include at least 3 positive themes and identify ALL negative patterns, even minor ones. For each negative theme, always provide the 3-tier fix suggestion (cheap/fast/premium).`;
+
+    return callClaude(systemPrompt, userPrompt, 4096);
+}
+
+// -----------------------------
+// Claude Call #3: Full Assessment + Action Plan
+// -----------------------------
+async function buildFullAssessment(listing, scores, rewriteResult, reviewThemes) {
+    const systemPrompt = `You are a senior Airbnb performance consultant. You provide expert-level listing assessments that are specific, actionable, and commercially valuable. Every recommendation should feel like it came from someone who manages 100+ properties.
+
+Your output must be structured, prioritised, and include specific actions with estimated time and cost where relevant. No generic advice — everything must be specific to THIS listing.
+
+Use British English spelling.
+
+IMPORTANT: For amenity suggestions, think cleverly about cheap additions that open new markets:
+- A £30 travel cot opens you to family bookings
+- A £5 carbon monoxide alarm enables a safety tick even with no CO sources
+- A £15 high chair signals family-friendliness
+- A £10 hairdryer stops guests marking it as missing
+Think about the ROI of each suggestion.
+
+Respond with ONLY valid JSON, no markdown code blocks.`;
+
+    const missingAmenityDetails = (listing.amenitiesMissing || [])
+        .map((key) => {
+            const suggestion = AMENITY_PURCHASE_SUGGESTIONS[key];
+            if (suggestion) return `${key}: ${suggestion.name} (${suggestion.cost}) - ${suggestion.market}`;
+            return key;
+        })
+        .join("\n");
+
+    const userPrompt = `Provide a comprehensive Pro-level assessment of this Airbnb listing.
+
+LISTING: "${listing.title}"
+LOCATION: ${listing.location || "Unknown"}
+TYPE: ${listing.propertyType || "Unknown"} (${listing.roomType || "Entire place"})
+CAPACITY: ${listing.maxGuests || "?"} guests, ${listing.bedrooms || "?"} bedrooms, ${listing.beds || "?"} beds, ${listing.bathrooms || "?"} bathrooms
+RATING: ${listing.rating || "N/A"} / 5 (${listing.reviewCount || 0} reviews)
+SUPERHOST: ${listing.isSuperhost ? "Yes" : "No"}
+
+CURRENT SCORES (out of 100):
+- Overall: ${scores.overall}/100 (${scores.label})
+- Title: ${scores.titleWeighted}/10 (internal ${scores.titleInternal}/${scores.titleMax})
+- Description: ${scores.descWeighted}/10 (internal ${scores.descInternal}/${scores.descMax})
+- Photos: ${scores.photoWeighted}/10 (${scores.photoCount} photos)
+- Amenities: ${scores.amenityWeighted}/10 (${scores.amenityCount} amenities)
+- Trust: ${scores.trustWeighted}/30
+- Competitive: ${scores.competitiveWeighted}/30
+
+REWRITTEN TITLE: "${rewriteResult?.rewritten_title || "N/A"}"
+REWRITTEN DESCRIPTION AVAILABLE: ${rewriteResult?.rewritten_description ? "Yes" : "No"}
+
+MISSING AMENITIES WITH PURCHASE SUGGESTIONS:
+${missingAmenityDetails || "None identified"}
+
+AMENITIES PRESENT: ${(listing.amenitiesPresent || []).join(", ")}
+
+REVIEW THEMES SUMMARY:
+${reviewThemes?.sentiment_summary || "No review data available"}
+Positive: ${(reviewThemes?.positive_themes || []).map((t) => t.theme).join("; ") || "None"}
+Negative: ${(reviewThemes?.negative_themes || []).map((t) => t.theme).join("; ") || "None"}
+Recurring issues: ${(reviewThemes?.recurring_issues || []).map((i) => i.issue).join("; ") || "None"}
+
+Provide the assessment as JSON:
+{
+  "strengths": [
+    {
+      "area": "What's working well",
+      "detail": "Specific explanation with evidence",
+      "recommendation": "How to leverage this strength further"
+    }
+  ],
+  "revenue_leaks": [
+    {
+      "area": "What's costing bookings or revenue",
+      "estimated_impact": "low|medium|high",
+      "detail": "Specific explanation",
+      "fix": "Exactly what to do about it"
+    }
+  ],
+  "instant_fixes": [
+    {
+      "fix": "What to change right now",
+      "time_estimate": "5 mins / 15 mins / 30 mins",
+      "expected_impact": "What improvement this will drive",
+      "instructions": "Step-by-step how to do it"
+    }
+  ],
+  "overall_improvements": [
+    {
+      "improvement": "What to improve",
+      "priority": "high|medium|low",
+      "estimated_cost": "Free / £X-£Y",
+      "estimated_time": "How long to implement",
+      "expected_impact": "What improvement this will drive",
+      "instructions": "How to implement this"
+    }
+  ],
+  "seven_day_plan": [
+    {
+      "day": "Day 1",
+      "focus": "What to focus on",
+      "tasks": ["Specific task 1", "Specific task 2"],
+      "time_needed": "Estimated time"
+    }
+  ],
+  "click_through_suggestions": [
+    {
+      "suggestion": "How to improve click-through from search results",
+      "rationale": "Why this will help",
+      "action": "Exact action to take"
+    }
+  ],
+  "amenity_suggestions": [
+    {
+      "amenity": "What to add",
+      "cost": "Estimated purchase cost",
+      "market_opened": "What guest segment this attracts",
+      "roi_explanation": "Why this is worth the investment",
+      "priority": "high|medium|low"
+    }
+  ],
+  "positioning_summary": "2-3 sentence assessment of where this listing sits in its market and what positioning strategy would maximise revenue"
+}
+
+REQUIREMENTS:
+- Minimum 3 instant fixes (things doable in under 30 minutes)
+- Minimum 5 overall improvements
+- The 7-day plan should be specific to THIS listing's weakest areas
+- At least 3 click-through suggestions
+- Amenity suggestions should include cost estimates and be ordered by ROI
+- Every suggestion must be specific to this property, not generic`;
+
+    return callClaude(systemPrompt, userPrompt, 6000);
+}
+
+// -----------------------------
+// Handler
+// -----------------------------
+export default async function handler(req, res) {
+    if (req.method !== "POST") {
+        return res.status(405).json({ error: "Method not allowed" });
+    }
+
+    if (!isAuthorised(req)) {
+        return res.status(401).json({ error: "Unauthorised" });
+    }
+
+    if (!ANTHROPIC_API_KEY) {
+        return res.status(500).json({ error: "Missing ANTHROPIC_API_KEY env var" });
+    }
+
+    try {
+        const body = req.body && typeof req.body === "object" ? req.body : {};
+        const jobId = getInputValue(body.job_id) || null;
+        const submissionId = getInputValue(body.submission_id) || null;
+
+        if (!jobId && !submissionId) {
+            return res.status(400).json({ error: "job_id or submission_id is required" });
+        }
+
+        // 1. Fetch submission
+        let subQuery = supabase.from("listing_submissions").select("*");
+        if (submissionId) subQuery = subQuery.eq("id", submissionId);
+        else subQuery = subQuery.eq("job_id", jobId);
+
+        const { data: submission, error: subErr } = await subQuery.maybeSingle();
+        if (subErr || !submission) {
+            return res.status(404).json({ error: "Submission not found" });
+        }
+
+        // 2. Fetch HasData raw response
+        const { data: fetchRow } = await supabase
+            .from("listing_fetches")
+            .select("raw_response")
+            .eq("submission_id", submission.id)
+            .eq("fetch_status", "success")
+            .eq("provider", "hasdata")
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+        if (!fetchRow?.raw_response) {
+            return res.status(400).json({ error: "No listing data found" });
+        }
+
+        const rawResponse = fetchRow.raw_response;
+        const property = rawResponse.property || rawResponse.data?.property || rawResponse.listing || rawResponse.data?.listing || {};
+
+        // 3. Fetch scores
+        const { data: scoreRow } = await supabase
+            .from("listing_scores")
+            .select("*")
+            .eq("submission_id", submission.id)
+            .order("scored_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+        if (!scoreRow) {
+            return res.status(400).json({ error: "No scores found — scoring must complete first" });
+        }
+
+        // 4. Fetch snapshot for structured data
+        const { data: snapshot } = await supabase
+            .from("listing_snapshots")
+            .select("*")
+            .eq("submission_id", submission.id)
+            .limit(1)
+            .maybeSingle();
+
+        // Parse signals from score summary
+        const summaryData = scoreRow.summary ? (typeof scoreRow.summary === "string" ? JSON.parse(scoreRow.summary) : scoreRow.summary) : {};
+        const signals = summaryData.signals || {};
+
+        // Build listing context object
+        const listing = {
+            title: property.title || snapshot?.title || "",
+            description: property.description || snapshot?.description || "",
+            propertyType: property.propertyType || property.property_type || snapshot?.property_type || "",
+            roomType: property.roomType || property.room_type || snapshot?.room_type || "",
+            location: property.location || property.city || snapshot?.location || "",
+            bedrooms: property.bedrooms || snapshot?.bedroom_count || null,
+            beds: property.beds || snapshot?.bed_count || null,
+            bathrooms: property.bathrooms || snapshot?.bathroom_count || null,
+            maxGuests: property.personCapacity || property.person_capacity || snapshot?.person_capacity || null,
+            rating: scoreRow.detected_rating || null,
+            reviewCount: scoreRow.detected_review_count || 0,
+            isSuperhost: property.host?.isSuperhost || property.host?.is_superhost || false,
+            amenitiesPresent: signals.amenities?.present || [],
+            amenitiesMissing: signals.amenities?.missing || [],
+            amenityCount: signals.amenities?.amenityCount || 0,
+        };
+
+        // Build scores context
+        const scores = {
+            overall: scoreRow.overall_score,
+            label: scoreRow.score_label,
+            titleWeighted: scoreRow.title_score,
+            titleInternal: signals.title?.internal || 0,
+            titleMax: signals.title?.max || 20,
+            descWeighted: scoreRow.description_score,
+            descInternal: signals.description?.internal || 0,
+            descMax: signals.description?.max || 30,
+            photoWeighted: scoreRow.photo_score,
+            photoCount: scoreRow.detected_photo_count || 0,
+            amenityWeighted: scoreRow.amenity_score,
+            amenityCount: signals.amenities?.amenityCount || 0,
+            trustWeighted: scoreRow.trust_score,
+            competitiveWeighted: scoreRow.market_score,
+        };
+
+        // Extract reviews from snapshot or raw response
+        let reviews = [];
+        if (snapshot?.reviews_excerpt_json) {
+            reviews = Array.isArray(snapshot.reviews_excerpt_json) ? snapshot.reviews_excerpt_json : [];
+        } else {
+            // Try extracting from raw response
+            const reviewCandidates = [property.reviews, rawResponse.reviews, rawResponse.listing?.reviews];
+            for (const candidate of reviewCandidates) {
+                if (Array.isArray(candidate)) {
+                    reviews = candidate.slice(0, 50).map((item) => {
+                        if (typeof item === "string") return { text: item };
+                        if (item && typeof item === "object") {
+                            return {
+                                text: item.text || item.comment || item.body || item.review || "",
+                                rating: item.rating || item.score || null,
+                                created_at: item.createdAt || item.date || null,
+                            };
+                        }
+                        return null;
+                    }).filter(Boolean);
+                    break;
+                }
+            }
+        }
+
+        // Create analysis record
+        const { data: analysisRow, error: insertErr } = await supabase
+            .from("listing_analyses")
+            .insert([{
+                submission_id: submission.id,
+                job_id: submission.job_id,
+                tier: "pro",
+                analysis_version: ANALYSIS_VERSION,
+                original_title_score: signals.title || null,
+                original_description_score: signals.description || null,
+                status: "processing",
+                status_message: "Analysis in progress",
+            }])
+            .select()
+            .single();
+
+        if (insertErr) {
+            console.error("Analysis insert error:", insertErr);
+            return res.status(500).json({ error: "Failed to create analysis record" });
+        }
+
+        // 5. Run the 3 Claude calls
+        const rawResponses = {};
+        let rewriteResult = null;
+        let reviewThemes = null;
+        let assessment = null;
+
+        // Call 1: Title + Description Rewrite
+        try {
+            rewriteResult = await rewriteTitleAndDescription(listing);
+            rawResponses.rewrite = rewriteResult;
+        } catch (err) {
+            console.error("Claude rewrite call failed:", err);
+            rawResponses.rewrite_error = err.message;
+        }
+
+        // Call 2: Review Theme Analysis
+        try {
+            reviewThemes = await analyseReviews(reviews, listing);
+            rawResponses.reviews = reviewThemes;
+        } catch (err) {
+            console.error("Claude review analysis failed:", err);
+            rawResponses.reviews_error = err.message;
+        }
+
+        // Call 3: Full Assessment + Action Plan
+        try {
+            assessment = await buildFullAssessment(listing, scores, rewriteResult, reviewThemes);
+            rawResponses.assessment = assessment;
+        } catch (err) {
+            console.error("Claude assessment call failed:", err);
+            rawResponses.assessment_error = err.message;
+        }
+
+        // 6. Update analysis record with results
+        const updatePayload = {
+            rewritten_title: rewriteResult?.rewritten_title || null,
+            rewritten_title_score: rewriteResult ? {
+                keyword_count: rewriteResult.title_keyword_count,
+                character_count: rewriteResult.title_character_count,
+                rationale: rewriteResult.title_rationale,
+            } : null,
+            rewritten_description: rewriteResult?.rewritten_description || null,
+            rewritten_description_score: rewriteResult ? {
+                keyword_count: rewriteResult.description_keyword_count,
+                character_count: rewriteResult.description_character_count,
+                rationale: rewriteResult.description_rationale,
+                before_after_summary: rewriteResult.before_after_summary,
+            } : null,
+            review_themes: reviewThemes || null,
+            strengths: assessment?.strengths || null,
+            revenue_leaks: assessment?.revenue_leaks || null,
+            instant_fixes: assessment?.instant_fixes || null,
+            overall_improvements: assessment?.overall_improvements || null,
+            seven_day_plan: assessment?.seven_day_plan || null,
+            click_through_suggestions: assessment?.click_through_suggestions || null,
+            amenity_suggestions: assessment?.amenity_suggestions || null,
+            positioning_summary: assessment?.positioning_summary || null,
+            raw_responses: rawResponses,
+            status: "complete",
+            status_message: "Analysis complete",
+            analysed_at: new Date().toISOString(),
+        };
+
+        const { error: updateErr } = await supabase
+            .from("listing_analyses")
+            .update(updatePayload)
+            .eq("id", analysisRow.id);
+
+        if (updateErr) {
+            console.error("Analysis update error:", updateErr);
+            return res.status(500).json({ error: "Failed to save analysis results" });
+        }
+
+        return res.status(200).json({
+            success: true,
+            submission_id: submission.id,
+            job_id: submission.job_id,
+            analysis_id: analysisRow.id,
+            status: "complete",
+            rewritten_title: rewriteResult?.rewritten_title || null,
+            review_themes_count: {
+                positive: (reviewThemes?.positive_themes || []).length,
+                negative: (reviewThemes?.negative_themes || []).length,
+                recurring_issues: (reviewThemes?.recurring_issues || []).length,
+            },
+            instant_fixes_count: (assessment?.instant_fixes || []).length,
+            improvements_count: (assessment?.overall_improvements || []).length,
+        });
+    } catch (e) {
+        console.error("Unhandled error in analyse-pro:", e);
+        return res.status(500).json({ error: "Server error" });
+    }
+}

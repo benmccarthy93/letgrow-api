@@ -8,6 +8,9 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
 });
 
+const APP_BASE_URL = process.env.APP_BASE_URL;
+const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET;
+
 const SCORING_VERSION = "v5_competitive_rates";
 
 // -----------------------------
@@ -1043,14 +1046,61 @@ export default async function handler(req, res) {
               return res.status(500).json({ error: "Failed to store score" });
       }
 
-      const { error: submissionUpdateError } = await supabase
-          .from("listing_submissions")
-          .update({ status: "complete", status_message: "Scoring complete" })
-          .eq("id", submission.id);
+      // Check if this is a pro/premium tier — if so, trigger analysis instead of completing
+      const tier = submission.tier || "free";
+      const needsAnalysis = tier === "pro" || tier === "premium";
 
-      if (submissionUpdateError) {
-              console.error("Submission update error:", submissionUpdateError);
-              return res.status(500).json({ error: "Score saved but failed to update submission status" });
+      if (needsAnalysis && APP_BASE_URL && INTERNAL_API_SECRET) {
+              // Update status to indicate analysis is next
+              await supabase
+                  .from("listing_submissions")
+                  .update({ status: "scored", status_message: "Scoring complete — analysis in progress" })
+                  .eq("id", submission.id);
+
+              // Trigger pro analysis in background (non-blocking)
+              const analyseUrl = `${APP_BASE_URL.replace(/\/+$/, "")}/api/analyse-pro`;
+              fetch(analyseUrl, {
+                  method: "POST",
+                  headers: {
+                      "Content-Type": "application/json",
+                      "x-internal-secret": INTERNAL_API_SECRET,
+                  },
+                  body: JSON.stringify({ submission_id: submission.id, job_id: submission.job_id }),
+              })
+                  .then(async (resp) => {
+                      if (resp.ok) {
+                          // Analysis complete — mark submission as complete
+                          await supabase
+                              .from("listing_submissions")
+                              .update({ status: "complete", status_message: "Analysis complete" })
+                              .eq("id", submission.id);
+                      } else {
+                          console.error("Pro analysis failed:", resp.status);
+                          // Still mark as complete so user gets their free score at minimum
+                          await supabase
+                              .from("listing_submissions")
+                              .update({ status: "complete", status_message: "Scoring complete (analysis failed)" })
+                              .eq("id", submission.id);
+                      }
+                  })
+                  .catch((err) => {
+                      console.error("Pro analysis trigger error:", err);
+                      supabase
+                          .from("listing_submissions")
+                          .update({ status: "complete", status_message: "Scoring complete (analysis error)" })
+                          .eq("id", submission.id);
+                  });
+      } else {
+              // Free tier — just mark as complete
+              const { error: submissionUpdateError } = await supabase
+                  .from("listing_submissions")
+                  .update({ status: "complete", status_message: "Scoring complete" })
+                  .eq("id", submission.id);
+
+              if (submissionUpdateError) {
+                      console.error("Submission update error:", submissionUpdateError);
+                      return res.status(500).json({ error: "Score saved but failed to update submission status" });
+              }
       }
 
       return res.status(200).json({
@@ -1060,6 +1110,8 @@ export default async function handler(req, res) {
               overall_score: overallScore,
               score_label: scoreLabel,
               breakdown,
+              tier,
+              analysis_triggered: needsAnalysis,
               detected_signals: { photos: detectedPhotoCount, reviews: detectedReviewCount, rating: detectedRating },
       });
   } catch (e) {
