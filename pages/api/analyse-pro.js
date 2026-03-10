@@ -20,10 +20,13 @@ const ANALYSIS_VERSION = "v1_pro";
 // -----------------------------
 const TITLE_SCORING_RULES = `
 TITLE SCORING RULES (max 20 points):
+- HARD LIMIT: Airbnb allows a MAXIMUM of 50 characters including spaces for the title. Never exceed this.
 - Length points: ≥35 characters = 10pts, ≥30 characters = 5pts, <30 characters = 0pts
 - Keyword points: ≥5 keyword matches = 10pts, ≥4 = 7pts, ≥3 = 3pts, ≥2 = 1pt, <2 = 0pts
 - ALL CAPS deduction: if entire title is uppercase, -10pts
 - Final score = clamp(lengthPoints + keywordPoints - capsDeduction, 0, 20)
+
+STRATEGY: You have exactly 50 characters to work with. Every character matters. Pack in 5+ keywords naturally while hitting ≥35 chars. Use "&" instead of "and", abbreviate where natural (e.g. "w/" for "with", "nr" for "near"). Lead with the strongest differentiator.
 
 KEYWORDS THAT COUNT (case-insensitive, partial match):
 Cities: london, manchester, birmingham, edinburgh, glasgow, liverpool, bristol, leeds, sheffield, newcastle, cardiff, nottingham, cambridge, oxford, brighton, bath, york, coventry, leicester, reading, southampton, portsmouth, dundee, aberdeen, norwich, exeter, chester, inverness
@@ -37,34 +40,64 @@ Features: fully furnished, newly renovated, bright and airy, modern design, spac
 
 const DESCRIPTION_SCORING_RULES = `
 DESCRIPTION SCORING RULES (max 30 points):
+- HARD LIMIT: Airbnb allows a MAXIMUM of 500 characters including spaces for the listing description. Never exceed this.
 - Length points: >400 characters = 10pts, ≥350 = 8pts, ≥300 = 3pts, <300 = 0pts
 - Keyword points: ≥15 keyword matches = 20pts, ≥12 = 15pts, ≥10 = 10pts, ≥7 = 5pts, ≥4 = 2pts, <4 = 0pts
 - Same keyword list as title scoring (cities, property types, locations, quality, amenities, guest types, features)
 - Final score = clamp(lengthPoints + keywordPoints, 0, 30)
 
+STRATEGY: You have 500 characters max. Aim for 420-490 characters. Every line must earn its place. Open with a punchy hook (who is this for + why it's special). Use emojis sparingly if the original listing uses them. Pack keywords naturally throughout — they should flow, never feel forced.
+
 CRITICAL: The description MUST:
-1. Be over 400 characters to get maximum length points (10pts)
+1. Be between 400-500 characters to get maximum length points (10pts) WITHOUT exceeding 500
 2. Naturally include at least 15 different keywords from the list to get maximum keyword points (20pts)
-3. Not be stuffed with keywords unnaturally - they must read well
+3. Not be stuffed with keywords unnaturally — they must read well and compel guests to book
 `;
 
-const AMENITY_PURCHASE_SUGGESTIONS = {
-    travel_cot: { name: "Travel cot", cost: "~£30", market: "Opens you up to families with babies/toddlers", priority: "high" },
-    high_chair: { name: "High chair", cost: "~£15-25", market: "Essential for family bookings with young children", priority: "high" },
-    hairdryer: { name: "Hairdryer", cost: "~£10-15", market: "Expected by most guests, frequently filtered for", priority: "high" },
-    co2_alarm: { name: "Carbon monoxide alarm", cost: "~£5-10", market: "Enables the safety tick even with no CO sources — builds trust", priority: "high" },
-    fire_extinguisher: { name: "Fire extinguisher", cost: "~£10-15", market: "Safety feature that boosts trust score significantly", priority: "high" },
-    first_aid_kit: { name: "First aid kit", cost: "~£5-10", market: "Cheap safety tick that reassures guests", priority: "medium" },
-    smoke_alarm: { name: "Smoke alarm", cost: "~£5-10", market: "Critical safety feature, often legally required", priority: "high" },
-    iron: { name: "Iron and ironing board", cost: "~£15-25", market: "Attracts business travellers and longer stays", priority: "medium" },
-    coffee_maker: { name: "Coffee machine (pod or filter)", cost: "~£20-40", market: "Frequently mentioned in positive reviews, adds premium feel", priority: "medium" },
-    workspace: { name: "Dedicated workspace / desk", cost: "~£30-60", market: "Opens up remote worker and business traveller market", priority: "medium" },
-    cot: { name: "Cot/crib", cost: "~£40-80", market: "Attracts families — parents actively filter for this", priority: "medium" },
-    ev_charger: { name: "EV charger", cost: "~£300-800 (installed)", market: "Growing market, significant differentiator if you have parking", priority: "low" },
-    bbq: { name: "BBQ/grill", cost: "~£30-80", market: "Great for summer bookings, garden properties, group stays", priority: "low" },
-    extra_pillows: { name: "Extra pillows and blankets", cost: "~£15-30", market: "Low cost comfort upgrade frequently praised in reviews", priority: "high" },
-    books: { name: "Books / reading material", cost: "~£0-10 (charity shop)", market: "Adds character, frequently mentioned positively", priority: "low" },
-    cooking_basics: { name: "Cooking basics (oil, salt, pepper, spices)", cost: "~£5-10", market: "Guests hate arriving to an empty kitchen", priority: "high" },
+const YOUR_PROPERTY_RULES = `
+"YOUR PROPERTY" SECTION RULES:
+- This is a SEPARATE section on Airbnb called "Your property" — it has NO character limit
+- Purpose: "Share a general description of your property's rooms and spaces so guests know what to expect"
+- This is where you put the detailed room-by-room breakdown, amenity highlights, and practical details
+- Use this section to include all the keyword-rich detail that won't fit in the 500-char description
+- Structure it clearly with sections for each room/space
+- Include practical details: bed types, kitchen equipment, bathroom features, storage, workspace setup
+- Mention transport links, local attractions, parking details here
+- This is your chance to sell every aspect of the property in detail
+`;
+
+// These are ONLY used as reference data passed to Claude — Claude decides what's
+// appropriate based on property type, location, and context.
+const AMENITY_REFERENCE = {
+    // Safety (always appropriate for any property)
+    co2_alarm: { name: "Carbon monoxide alarm", cost: "~£5-10", note: "Enables the safety tick even with no CO sources — £5 for a trust boost" },
+    fire_extinguisher: { name: "Fire extinguisher", cost: "~£10-15", note: "Boosts trust score significantly" },
+    first_aid_kit: { name: "First aid kit", cost: "~£5-10", note: "Cheap safety tick" },
+    smoke_alarm: { name: "Smoke alarm", cost: "~£5-10", note: "Often legally required" },
+
+    // Universal essentials (appropriate for almost any property)
+    hairdryer: { name: "Hairdryer", cost: "~£10-15", note: "Guests actively filter for this" },
+    iron: { name: "Iron and ironing board", cost: "~£15-25", note: "Business travellers and longer stays" },
+    coffee_maker: { name: "Coffee machine (pod or filter)", cost: "~£20-40", note: "Frequently praised in reviews" },
+    extra_pillows: { name: "Extra pillows and blankets", cost: "~£15-30", note: "Comfort upgrade praised in reviews" },
+    cooking_basics: { name: "Cooking basics (oil, salt, pepper, spices)", cost: "~£5-10", note: "Guests hate an empty kitchen" },
+    books: { name: "Books / reading material", cost: "~£0-10 (charity shop)", note: "Adds character" },
+
+    // Family (appropriate if property can sleep 3+ or has space)
+    travel_cot: { name: "Travel cot", cost: "~£30", note: "Opens you to family bookings" },
+    high_chair: { name: "High chair", cost: "~£15-25", note: "Essential for family guests" },
+    cot: { name: "Cot/crib", cost: "~£40-80", note: "Parents actively filter for this" },
+
+    // Work (appropriate for city/urban/apartment properties)
+    workspace: { name: "Dedicated workspace / desk", cost: "~£30-60", note: "Remote workers and business travellers" },
+
+    // Outdoor (ONLY appropriate if property has outdoor space, garden, or is rural)
+    bbq: { name: "BBQ/grill", cost: "~£30-80", note: "ONLY if garden/outdoor space exists" },
+    ev_charger: { name: "EV charger", cost: "~£300-800 (installed)", note: "ONLY if parking is available" },
+
+    // Premium (NEVER suggest for city apartments or small flats)
+    // hot_tub, sauna, pool — these are NOT in the suggestions list because they are
+    // unrealistic for most properties. Claude should never suggest installing these.
 };
 
 // -----------------------------
@@ -107,7 +140,7 @@ async function callClaude(systemPrompt, userPrompt, maxTokens = 4096) {
 // Claude Call #1: Title + Description Rewrite
 // -----------------------------
 async function rewriteTitleAndDescription(listing) {
-    const systemPrompt = `You are an expert Airbnb listing copywriter and SEO specialist. Your job is to rewrite listing titles and descriptions so they score MAXIMUM points on our internal scoring system while also being genuinely compelling for guests.
+    const systemPrompt = `You are an expert Airbnb listing copywriter and SEO specialist. Your job is to rewrite listing titles, descriptions, and the "Your property" section so they score MAXIMUM points on our internal scoring system while also being genuinely compelling for guests.
 
 You MUST follow the scoring rules EXACTLY. Your rewritten title and description should score the maximum possible points.
 
@@ -115,19 +148,22 @@ ${TITLE_SCORING_RULES}
 
 ${DESCRIPTION_SCORING_RULES}
 
+${YOUR_PROPERTY_RULES}
+
 IMPORTANT RULES:
-1. The rewritten title MUST score 20/20 (≥35 chars + ≥5 keywords + not all caps)
-2. The rewritten description MUST score 30/30 (>400 chars + ≥15 keywords)
-3. Both must read naturally and be compelling — no keyword stuffing
-4. Preserve the property's actual features, location, and character
-5. Use British English spelling
-6. The title should lead with the strongest differentiator
-7. The description should open with a punchy hook in the first 3 lines
-8. Structure the description with clear sections, not walls of text
+1. The rewritten title MUST be ≤50 characters AND score 20/20 (≥35 chars + ≥5 keywords + not all caps)
+2. The rewritten description MUST be ≤500 characters AND score 30/30 (>400 chars + ≥15 keywords)
+3. The "Your property" section has NO character limit — use it to add all the rich detail
+4. Both title and description must read naturally and be compelling — no keyword stuffing
+5. Preserve the property's actual features, location, and character — never invent amenities or features the listing doesn't have
+6. Use British English spelling
+7. The title should lead with the strongest differentiator
+8. The description should open with a punchy hook that tells guests exactly who this is for and why it's special
+9. Emojis are OK in the description if the original listing uses them, but use sparingly
 
 Respond with ONLY valid JSON, no markdown code blocks.`;
 
-    const userPrompt = `Rewrite this Airbnb listing's title and description to score maximum points.
+    const userPrompt = `Rewrite this Airbnb listing's title, description, and "Your property" section to score maximum points.
 
 CURRENT TITLE: "${listing.title || "No title"}"
 CURRENT DESCRIPTION: "${listing.description || "No description"}"
@@ -147,14 +183,15 @@ KEY AMENITIES MISSING: ${(listing.amenitiesMissing || []).join(", ") || "None"}
 
 Respond with this JSON structure:
 {
-  "rewritten_title": "the new title (must be ≥35 chars with ≥5 keywords)",
+  "rewritten_title": "the new title (MUST be ≤50 characters AND ≥35 characters with ≥5 keywords)",
   "title_keyword_count": <number of scoring keywords in new title>,
-  "title_character_count": <character count>,
+  "title_character_count": <character count — MUST be ≤50>,
   "title_rationale": "Brief explanation of why this title scores higher and converts better",
-  "rewritten_description": "the full new description (must be >400 chars with ≥15 keywords)",
+  "rewritten_description": "the full new description (MUST be ≤500 characters AND >400 characters with ≥15 keywords)",
   "description_keyword_count": <number of scoring keywords in new description>,
-  "description_character_count": <character count>,
+  "description_character_count": <character count — MUST be ≤500>,
   "description_rationale": "Brief explanation of improvements made",
+  "rewritten_your_property": "Full rewritten 'Your property' section — detailed room-by-room breakdown with all the rich detail, amenity highlights, transport links, local attractions, practical info. No character limit. Make this comprehensive and keyword-rich.",
   "before_after_summary": "One sentence summarising the key improvement"
 }`;
 
@@ -251,25 +288,32 @@ Include at least 3 positive themes and identify ALL negative patterns, even mino
 // Claude Call #3: Full Assessment + Action Plan
 // -----------------------------
 async function buildFullAssessment(listing, scores, rewriteResult, reviewThemes) {
-    const systemPrompt = `You are a senior Airbnb performance consultant. You provide expert-level listing assessments that are specific, actionable, and commercially valuable. Every recommendation should feel like it came from someone who manages 100+ properties.
+    const systemPrompt = `You are a senior Airbnb performance consultant who manages 100+ properties. You provide expert-level assessments that are specific, actionable, and commercially valuable.
 
-Your output must be structured, prioritised, and include specific actions with estimated time and cost where relevant. No generic advice — everything must be specific to THIS listing.
+Your recommendations must be REALISTIC and TAILORED to the specific property type and context:
+- City apartment? Suggest a desk for remote workers, not a hot tub or BBQ.
+- Rural cottage? A BBQ and outdoor seating makes sense, a dedicated workspace probably doesn't.
+- Family home? Travel cot and high chair are obvious wins. But not for a romantic studio.
+- 1-bed flat? Don't suggest things that need outdoor space or a garage.
+
+NEVER suggest unrealistic amenities. A city flat cannot add a pool, sauna, hot tub, or BBQ. Think about what the host can ACTUALLY buy on Amazon for under £50 that will open a new market or solve a guest complaint.
+
+Be clever and specific. The best recommendations are ones the host wouldn't think of themselves:
+- "Buy a £5 CO alarm even though you have no gas — it enables the safety tick on Airbnb"
+- "A £3 pack of earplugs in the bedside drawer pre-empts noise complaints before they happen"
+- "A £12 Bluetooth speaker turns a basic flat into a lifestyle stay"
+- "A laminated card with local restaurant recommendations costs nothing and gets mentioned in reviews"
+- "A £15 luggage rack stops guests putting suitcases on your bed"
+- "A USB charging station by the bed (£8) is the kind of detail guests photograph and praise"
 
 Use British English spelling.
-
-IMPORTANT: For amenity suggestions, think cleverly about cheap additions that open new markets:
-- A £30 travel cot opens you to family bookings
-- A £5 carbon monoxide alarm enables a safety tick even with no CO sources
-- A £15 high chair signals family-friendliness
-- A £10 hairdryer stops guests marking it as missing
-Think about the ROI of each suggestion.
 
 Respond with ONLY valid JSON, no markdown code blocks.`;
 
     const missingAmenityDetails = (listing.amenitiesMissing || [])
         .map((key) => {
-            const suggestion = AMENITY_PURCHASE_SUGGESTIONS[key];
-            if (suggestion) return `${key}: ${suggestion.name} (${suggestion.cost}) - ${suggestion.market}`;
+            const ref = AMENITY_REFERENCE[key];
+            if (ref) return `${key}: ${ref.name} (${ref.cost}) - ${ref.note}`;
             return key;
         })
         .join("\n");
@@ -295,10 +339,10 @@ CURRENT SCORES (out of 100):
 REWRITTEN TITLE: "${rewriteResult?.rewritten_title || "N/A"}"
 REWRITTEN DESCRIPTION AVAILABLE: ${rewriteResult?.rewritten_description ? "Yes" : "No"}
 
-MISSING AMENITIES WITH PURCHASE SUGGESTIONS:
+MISSING AMENITIES FROM OUR SCORING (reference only — only suggest ones that are REALISTIC for this property type):
 ${missingAmenityDetails || "None identified"}
 
-AMENITIES PRESENT: ${(listing.amenitiesPresent || []).join(", ")}
+AMENITIES ALREADY PRESENT: ${(listing.amenitiesPresent || []).join(", ")}
 
 REVIEW THEMES SUMMARY:
 ${reviewThemes?.sentiment_summary || "No review data available"}
@@ -311,7 +355,7 @@ Provide the assessment as JSON:
   "strengths": [
     {
       "area": "What's working well",
-      "detail": "Specific explanation with evidence",
+      "detail": "Specific explanation with evidence from the data",
       "recommendation": "How to leverage this strength further"
     }
   ],
@@ -328,7 +372,7 @@ Provide the assessment as JSON:
       "fix": "What to change right now",
       "time_estimate": "5 mins / 15 mins / 30 mins",
       "expected_impact": "What improvement this will drive",
-      "instructions": "Step-by-step how to do it"
+      "instructions": "Step-by-step how to do it on Airbnb"
     }
   ],
   "overall_improvements": [
@@ -352,17 +396,18 @@ Provide the assessment as JSON:
   "click_through_suggestions": [
     {
       "suggestion": "How to improve click-through from search results",
-      "rationale": "Why this will help",
+      "rationale": "Why this will help based on how Airbnb search works",
       "action": "Exact action to take"
     }
   ],
   "amenity_suggestions": [
     {
-      "amenity": "What to add",
-      "cost": "Estimated purchase cost",
-      "market_opened": "What guest segment this attracts",
-      "roi_explanation": "Why this is worth the investment",
-      "priority": "high|medium|low"
+      "amenity": "What to add (MUST be realistic for this property type)",
+      "cost": "Estimated purchase cost in GBP",
+      "market_opened": "What guest segment or behaviour this enables",
+      "roi_explanation": "Why this specific addition is worth it for THIS property",
+      "priority": "high|medium|low",
+      "where_to_buy": "Specific suggestion (e.g. 'Amazon', 'Argos', 'local hardware store')"
     }
   ],
   "positioning_summary": "2-3 sentence assessment of where this listing sits in its market and what positioning strategy would maximise revenue"
@@ -371,10 +416,12 @@ Provide the assessment as JSON:
 REQUIREMENTS:
 - Minimum 3 instant fixes (things doable in under 30 minutes)
 - Minimum 5 overall improvements
-- The 7-day plan should be specific to THIS listing's weakest areas
+- The 7-day plan MUST be specific to THIS listing's weakest areas — if photos are weakest, days 1-2 are photos; if description is strong, don't waste a day on it
 - At least 3 click-through suggestions
-- Amenity suggestions should include cost estimates and be ordered by ROI
-- Every suggestion must be specific to this property, not generic`;
+- Amenity suggestions MUST be realistic for this property type — NEVER suggest hot tubs, saunas, pools, BBQs, or gardens for city apartments/flats
+- Include at least 2 "clever" suggestions the host wouldn't think of themselves (e.g. USB charging station, luggage rack, laminated local guide, earplugs pack, Bluetooth speaker)
+- Include a "total investment" line: sum up all amenity suggestions to show e.g. "For approximately £85 total, you can add 8 amenities that open up family and business traveller markets"
+- Every suggestion must be specific to THIS property — generic advice = failure`;
 
     return callClaude(systemPrompt, userPrompt, 6000);
 }
@@ -588,6 +635,7 @@ export default async function handler(req, res) {
                 rationale: rewriteResult.description_rationale,
                 before_after_summary: rewriteResult.before_after_summary,
             } : null,
+            rewritten_your_property: rewriteResult?.rewritten_your_property || null,
             review_themes: reviewThemes || null,
             strengths: assessment?.strengths || null,
             revenue_leaks: assessment?.revenue_leaks || null,

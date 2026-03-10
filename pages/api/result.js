@@ -299,6 +299,7 @@ export default async function handler(req, res) {
                     rewritten_title_score: analysisRow.rewritten_title_score,
                     rewritten_description: analysisRow.rewritten_description,
                     rewritten_description_score: analysisRow.rewritten_description_score,
+                    rewritten_your_property: analysisRow.rewritten_your_property,
                     original_title_score: analysisRow.original_title_score,
                     original_description_score: analysisRow.original_description_score,
                     review_themes: analysisRow.review_themes,
