@@ -747,6 +747,7 @@ export default async function handler(req, res) {
           .select("*")
           .eq("submission_id", submission.id)
           .eq("fetch_status", "success")
+          .eq("provider", "hasdata")
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
