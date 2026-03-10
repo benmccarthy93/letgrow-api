@@ -331,6 +331,27 @@ const AMENITY_SCORING_TABLE = [
 const AMENITY_TABLE_MAX_POSITIVE = AMENITY_SCORING_TABLE.reduce((sum, item) => sum + item.positive, 0);
 const AMENITY_INTERNAL_MAX = 50 + AMENITY_TABLE_MAX_POSITIVE;
 
+const AMENITY_LABELS = {
+    wifi: "WiFi", free_parking: "free parking", hot_tub: "a hot tub",
+    sauna: "a sauna", pets: "pet-friendly access", heating: "heating",
+    washing_machine: "a washing machine", tv: "a TV", air_con: "air conditioning",
+    kitchen: "a full kitchen", fire_extinguisher: "a fire extinguisher",
+    smoke_alarm: "a smoke alarm", co2_alarm: "a carbon monoxide alarm",
+    first_aid_kit: "a first aid kit", hairdryer: "a hairdryer", iron: "an iron",
+    workspace: "a dedicated workspace", tumble_dryer: "a tumble dryer",
+    free_street_parking: "free street parking", travel_cot: "a travel cot",
+    bbq: "a BBQ", pool: "a pool", ev_charger: "an EV charger", bath: "a bath",
+    cot: "a cot", coffee_maker: "a coffee maker", dining_table: "a dining table",
+    high_chair: "a high chair", king_bed: "a king-size bed", patio: "a patio",
+    paid_parking: "paid parking",
+};
+
+function joinList(items) {
+    if (items.length === 0) return "";
+    if (items.length === 1) return items[0];
+    return items.slice(0, -1).join(", ") + " and " + items[items.length - 1];
+}
+
 function scoreAmenities(property) {
     const amenityTitles = normaliseAmenityTitles(property?.amenities || []);
     const amenityCount = amenityTitles.length;
@@ -636,44 +657,206 @@ function getOverallLabel(overallScore) {
     return "Exceptional";
 }
 
-function buildCategoryMessages(breakdown) {
+function buildTitleMessage(weightedScore, maxWeight, data) {
+    if (weightedScore / maxWeight >= 0.8) {
+        return "Your title is performing well — it's clearly structured, includes relevant search terms, and is likely helping your listing stand out in results. This is one of your stronger areas.";
+    }
+    const issues = [];
+    if (data.capsDeduction > 0) {
+        issues.push("the all-caps formatting may be hurting readability and making the listing feel less professional in search results");
+    }
+    if (data.lengthPoints === 0) {
+        issues.push("it's significantly shorter than top-performing titles, which limits how much useful information guests see before deciding whether to click");
+    } else if (data.lengthPoints <= 5) {
+        issues.push("it's on the shorter side compared to high-performing listings, giving you less space to communicate what makes the property worth clicking on");
+    }
+    if (data.keywordPoints === 0) {
+        issues.push("it doesn't appear to contain the types of terms that guests actively search and filter for on Airbnb");
+    } else if (data.keywordPoints <= 3) {
+        issues.push("it contains only a small number of the search-relevant terms that typically help listings get found and clicked on");
+    }
+    if (issues.length === 0) {
+        return "Your title has some strengths but isn't performing at the level where it actively drives clicks. The difference between an average title and a high-performing one is often subtle — but the impact on daily traffic can be significant.";
+    }
+    return `Your title is underperforming — ${joinList(issues)}. Your title is the very first thing a guest sees in search results, and weaknesses here quietly cost you clicks every single day.`;
+}
+
+function buildDescriptionMessage(weightedScore, maxWeight, data) {
+    if (weightedScore / maxWeight >= 0.8) {
+        return "Your description is performing well — it's detailed enough, includes relevant keywords, and gives guests a clear picture of the stay. This is helping convert browsers into bookers.";
+    }
+    const issues = [];
+    if (data.lengthPoints === 0) {
+        issues.push(`your description is only around ${data.descLength} characters, which is well below what top-performing listings typically have`);
+    } else if (data.lengthPoints <= 5) {
+        issues.push("your description could be more detailed — guests often need more context before they feel confident enough to book");
+    }
+    if (data.keywordPoints === 0) {
+        issues.push("it appears to contain very few of the terms that help Airbnb's search algorithm understand and surface your listing to the right guests");
+    } else if (data.keywordPoints <= 5) {
+        issues.push(`only ${data.keywordCount} relevant search terms were detected, which is below the threshold where listings typically start ranking more competitively`);
+    }
+    if (issues.length === 0) {
+        return "Your description has some useful content but isn't working as hard as it could to convert interested guests. When the value of a stay isn't communicated quickly and clearly, guests tend to keep scrolling.";
+    }
+    return `Your description is leaving performance on the table — ${joinList(issues)}. A weak description doesn't just lose bookings — it also affects how Airbnb ranks and surfaces your listing against competitors.`;
+}
+
+function buildPhotoMessage(weightedScore, maxWeight, data) {
+    if (weightedScore / maxWeight >= 0.8) {
+        return `Your photo count (${data.photoCount}) is strong and falls within the range where listings tend to perform best. Good visual coverage helps guests feel confident about booking without needing to look elsewhere.`;
+    }
+    if (data.photoCount < 10) {
+        return `Only ${data.photoCount} photos were detected on your listing — well below what most guests expect. With this few images, guests are unlikely to feel confident enough to book and will almost certainly look at alternatives first.`;
+    }
+    if (data.photoCount <= 20) {
+        return `Your listing has ${data.photoCount} photos, which is below the level where most top-performing listings sit. Guests rely heavily on photos to build booking confidence, and thinner photo sets consistently lose out to competitors with stronger visual coverage.`;
+    }
+    if (data.photoCount > 60) {
+        return `Your listing has ${data.photoCount} photos — above the point where additional images tend to help. An excessively large photo set can dilute the impact of your strongest images and make it harder for guests to evaluate the property quickly.`;
+    }
+    return `Your listing has ${data.photoCount} photos — reasonable, but not yet at the level where the best-performing listings in most markets tend to sit. Guests often choose the listing that gives them the most visual confidence.`;
+}
+
+function buildAmenityMessage(weightedScore, maxWeight, data) {
+    if (weightedScore / maxWeight >= 0.8) {
+        return `Your amenity coverage is strong with ${data.amenityCount} amenities listed. You're covering the essentials well and guests comparing options in your area are unlikely to find obvious gaps. This is working in your favour.`;
+    }
+    const missingWithValue = data.missing
+        .map(key => {
+            const entry = AMENITY_SCORING_TABLE.find(a => a.key === key);
+            return entry ? { key, positive: entry.positive } : null;
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.positive - a.positive);
+    const topMissing = missingWithValue.slice(0, 3);
+    const namedMissing = topMissing
+        .map(m => AMENITY_LABELS[m.key] || m.key.replace(/_/g, " "))
+        .filter(Boolean);
+
+    if (namedMissing.length > 0 && data.amenityCount < 20) {
+        return `Your listing has a fairly thin amenity set (${data.amenityCount} detected) and appears to be missing ${joinList(namedMissing)}. Guests frequently filter and compare by amenities — these gaps may be quietly pushing bookings toward nearby competitors.`;
+    }
+    if (namedMissing.length > 0) {
+        return `Your listing appears to be missing ${joinList(namedMissing)} — amenities that guests frequently expect and filter for. Even with ${data.amenityCount} amenities listed, these specific gaps can affect how your listing stacks up when guests compare similar options.`;
+    }
+    if (data.amenityCount < 20) {
+        return `Only ${data.amenityCount} amenities were detected on your listing, which is below the level where guests typically feel they have the full picture. Thinner amenity coverage can make nearby listings look like the safer, more complete choice.`;
+    }
+    return "Your amenities cover some basics but there appear to be gaps in areas that guests commonly expect. When guests compare similar listings side by side, missing amenities can quietly tip the decision toward a competitor.";
+}
+
+function buildTrustMessage(weightedScore, maxWeight, data) {
+    if (weightedScore / maxWeight >= 0.8) {
+        return "Your trust signals are strong — solid review coverage, a high rating, and the kind of profile that reassures guests at a glance. This is one of your biggest competitive advantages.";
+    }
+    const issues = [];
+    if (data.reviewVolumeScore <= 3) {
+        issues.push(`your review count (${data.reviewCount}) is low, which makes it harder for new guests to feel confident booking`);
+    } else if (data.reviewVolumeScore <= 10) {
+        issues.push(`your review count (${data.reviewCount}) is moderate but still below the level where guests feel fully reassured`);
+    }
+    if (data.ratingScore === 0 && data.rating > 0) {
+        issues.push(`your rating (${data.rating}) is below the threshold that most guests consider acceptable`);
+    } else if (data.ratingScore <= 3 && data.rating > 0) {
+        issues.push(`your rating (${data.rating}) is reasonable but noticeably below the top performers in most markets`);
+    } else if (data.ratingScore <= 10 && data.rating > 0) {
+        issues.push(`your rating (${data.rating}) is decent but hasn't crossed into the range where it becomes a strong trust signal`);
+    }
+    if (data.superhostScore === 0) {
+        issues.push("the listing doesn't have Superhost status, which many guests use as a quick trust filter when choosing between options");
+    }
+    if (data.responseTimeScore === 0) {
+        issues.push("response time doesn't appear to be in the top tier, which can affect both guest confidence and search ranking");
+    }
+    if (data.safetyDeduction < -10) {
+        issues.push("several safety features appear to be missing or unlisted, which can reduce guest confidence before they even enquire");
+    } else if (data.safetyDeduction < 0) {
+        issues.push("at least one key safety feature appears to be missing or unlisted");
+    }
+    if (issues.length === 0) {
+        return "Your trust signals are building but haven't yet reached the level where they actively work in your favour. Trust carries the highest weight in your score (30%), so even small gaps here have a disproportionate effect on your overall performance.";
+    }
+    const topIssues = issues.slice(0, 3);
+    return `Your trust profile has gaps that are likely affecting bookings — ${joinList(topIssues)}. Trust signals carry the highest weight in your score (30%), and weaknesses here have a disproportionate impact on both visibility and conversion.`;
+}
+
+function buildCompetitiveMessage(weightedScore, maxWeight, data) {
+    if (weightedScore / maxWeight >= 0.8) {
+        return "Your competitive positioning is strong — your pricing shows smart variation, your calendar signals demand, and your availability settings are well-calibrated. This is helping you maximise both bookings and revenue.";
+    }
+    if (data.noData) {
+        return "We weren't able to fully analyse your pricing and availability data for this listing. Without this data, your competitive positioning score is limited — and this category accounts for 30% of your overall score.";
+    }
+    const issues = [];
+    if (data.signals.flatPricingDetection < 0) {
+        issues.push("your pricing appears to be completely flat across your calendar, which signals to Airbnb's algorithm that the listing may not be actively managed");
+    }
+    if (data.signals.weekendPriceUplift === 0 && data.signals.flatPricingDetection >= 0) {
+        issues.push("no weekend price uplift was detected, meaning you may be undercharging on your highest-demand nights");
+    }
+    if (data.signals.seasonalPricingShifts === 0 && data.signals.flatPricingDetection >= 0) {
+        issues.push("no seasonal pricing variation was detected, which suggests the listing isn't capturing peak-period revenue");
+    }
+    if (data.signals.longGaps < 0) {
+        issues.push("your calendar has large blocks of consecutive open dates, which can signal low demand and push your listing lower in search");
+    }
+    if (data.signals.weekendAvailability < 0) {
+        issues.push("most of your weekends in the next 30 days are still open — unusual for well-performing listings and often a sign of pricing or positioning issues");
+    }
+    if (data.signals.minimumStay <= -10) {
+        const avgMin = data.meta?.avgMinNights;
+        const minText = avgMin ? ` (averaging ${avgMin} nights)` : "";
+        issues.push(`your minimum stay requirement is high${minText}, which significantly reduces the pool of guests who can book`);
+    }
+    if (data.signals.avail0to10 < 0) {
+        issues.push("your near-term availability (next 10 days) is wide open, which often indicates pricing issues or weak demand signals");
+    }
+    if (issues.length === 0) {
+        return "Your pricing and availability strategy shows some positive signals, but isn't yet optimised to the level of top-performing listings in most markets. This category carries 30% of your overall score, so even moderate improvements here could have a meaningful impact on revenue.";
+    }
+    const topIssues = issues.slice(0, 3);
+    return `Your competitive positioning has issues that are likely costing you revenue — ${joinList(topIssues)}. Pricing and availability carry the highest weight in your score (30%), and these signals directly affect both your search ranking and earning potential.`;
+}
+
+function buildCategoryMessages(breakdown, titleData, descriptionData, photoData, amenityData, trustData, competitiveData) {
     return {
           category_messages: [
             {
-                      category: "Title Strength",
+                      category: "Title",
                       weight: "10%",
                       score: breakdown.title,
-                      message: breakdown.title <= 2 ? "Your title looks weak or too generic, which may be limiting clicks before guests even open the listing." : breakdown.title <= 5 ? "Your title is readable, but it feels fairly ordinary and may not be surfacing the strongest reasons to book." : breakdown.title <= 8 ? "Your title is reasonably clear and useful, though it may still be underselling the most compelling parts of the stay." : "Your title is doing a good job of signalling value, clarity and guest relevance.",
+                      message: buildTitleMessage(breakdown.title, BUCKET_WEIGHTS.title, titleData),
             },
             {
-                      category: "Description Strength",
+                      category: "Description",
                       weight: "10%",
                       score: breakdown.description,
-                      message: breakdown.description <= 2 ? "Your description looks thin or too vague, so guests may not be getting enough confidence from it." : breakdown.description <= 5 ? "Your description covers some basics, but the opening may be too slow or too generic to sell the stay well." : breakdown.description <= 8 ? "Your description is reasonably specific and useful, though the value could be surfaced faster and more clearly." : "Your description is doing a good job of explaining the stay in a clear and persuasive way.",
+                      message: buildDescriptionMessage(breakdown.description, BUCKET_WEIGHTS.description, descriptionData),
             },
             {
-                      category: "Photo Strength",
+                      category: "Photos",
                       weight: "10%",
                       score: breakdown.photos,
-                      message: breakdown.photos <= 2 ? "Your photo set looks too thin to build strong booking confidence, and guests may not be seeing enough of the space." : breakdown.photos <= 5 ? "Your photos give some visibility, but the volume still looks light and may be leaving gaps in room coverage." : breakdown.photos <= 8 ? "Your photo set is decent in places, though fuller coverage and stronger variety would improve confidence." : "Your photo coverage looks solid overall and is doing a good job of helping guests picture the stay.",
+                      message: buildPhotoMessage(breakdown.photos, BUCKET_WEIGHTS.photos, photoData),
             },
             {
-                      category: "Amenities & Guest Appeal",
+                      category: "Amenities",
                       weight: "10%",
                       score: breakdown.amenities,
-                      message: breakdown.amenities <= 2 ? "Your amenities look light on key practical details, which may be making the stay feel less ready for real guest needs." : breakdown.amenities <= 5 ? "Your amenities cover some important basics, though there still appear to be practical gaps that could hold the listing back." : breakdown.amenities <= 8 ? "Your amenities look fairly solid overall, though a few practical extras could still improve guest confidence." : "Your amenities are well-rounded and are supporting the listing strongly.",
+                      message: buildAmenityMessage(breakdown.amenities, BUCKET_WEIGHTS.amenities, amenityData),
             },
             {
-                      category: "Trust Signals",
+                      category: "Trust",
                       weight: "30%",
                       score: breakdown.trust,
-                      message: breakdown.trust <= 7 ? "Your trust signals look weak at the moment, which may be making guests hesitate before booking." : breakdown.trust <= 15 ? "Your trust profile is building, but the review depth or reassurance signals still look fairly limited." : breakdown.trust <= 22 ? "Your trust signals are reasonably solid, though there is still room to strengthen guest confidence further." : "Your listing has strong trust signals, supported by guest feedback and reassurance details.",
+                      message: buildTrustMessage(breakdown.trust, BUCKET_WEIGHTS.trust, trustData),
             },
             {
-                      category: "Competitive Positioning",
+                      category: "Competitive positioning",
                       weight: "30%",
                       score: breakdown.competitive,
-                      message: breakdown.competitive <= 6 ? "Your pricing and availability signals suggest the listing may not be competing effectively — flat pricing, wide-open calendars, or high minimum stays could be holding it back." : breakdown.competitive <= 12 ? "Your pricing shows some variation but there are still gaps in dynamic pricing or availability management that may be costing bookings." : breakdown.competitive <= 22 ? "Your pricing strategy and availability look reasonably strong, though sharper weekend uplift, seasonal adjustments, or tighter availability windows could improve performance." : "Your listing shows strong competitive pricing signals — good dynamic pricing, tight availability, and smart minimum stay settings.",
+                      message: buildCompetitiveMessage(breakdown.competitive, BUCKET_WEIGHTS.competitive, competitiveData),
             },
                 ],
     };
@@ -804,7 +987,7 @@ export default async function handler(req, res) {
         const detectedReviewCount = trustData.reviewCount;
         const detectedRating = trustData.rating;
 
-      const summaryPayload = buildCategoryMessages(breakdown);
+      const summaryPayload = buildCategoryMessages(breakdown, titleData, descriptionData, photoData, amenityData, trustData, competitiveData);
         const topFixes = buildTopFixes(overallScore, breakdown);
 
       const signalsPayload = {

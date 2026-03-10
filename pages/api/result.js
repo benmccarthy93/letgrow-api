@@ -103,50 +103,31 @@ function normaliseMessages(summary, overallScore = 0) {
             mappedFromArray.competitive_positioning = message
     }
 
-    const fearMode = overallScore < 80
-
-    if (!fearMode) {
-        return {
-            title:
-                parsed.title ||
-                mappedFromArray.title ||
-                "Your title is helping the listing communicate its value more clearly in search results.",
-            description:
-                parsed.description ||
-                mappedFromArray.description ||
-                "Your description is supporting the listing reasonably well and helping guests understand the stay.",
-            photos:
-                parsed.photos ||
-                mappedFromArray.photos ||
-                "Your photo set is giving guests useful visual context and supporting booking confidence.",
-            amenities:
-                parsed.amenities ||
-                mappedFromArray.amenities ||
-                "Your amenities are supporting the listing reasonably well against similar properties.",
-            trust:
-                parsed.trust ||
-                mappedFromArray.trust ||
-                "Your trust signals are helping guests feel more confident about booking.",
-            competitive_positioning:
-                parsed.competitive_positioning ||
-                mappedFromArray.competitive_positioning ||
-                "Your listing is communicating its value reasonably clearly against competing properties.",
-        }
-    }
-
     return {
         title:
-            "Your title may not be doing enough to attract clicks in search results. If stronger competing listings are clearer or more compelling, you may be losing traffic before guests even open the page.",
+            parsed.title ||
+            mappedFromArray.title ||
+            "Your title is helping the listing communicate its value more clearly in search results.",
         description:
-            "Your description may not be converting enough interested guests into bookings. When the value is not surfaced strongly enough, guests often continue browsing similar listings instead.",
+            parsed.description ||
+            mappedFromArray.description ||
+            "Your description is supporting the listing reasonably well and helping guests understand the stay.",
         photos:
-            "Your photo set may be reducing booking confidence. Listings with thinner or less persuasive visual coverage often struggle to convert as strongly as better-presented competitors.",
+            parsed.photos ||
+            mappedFromArray.photos ||
+            "Your photo set is giving guests useful visual context and supporting booking confidence.",
         amenities:
-            "Your amenity mix may not be helping the listing compete as strongly as it could. When guests compare similar options, practical amenity gaps can hurt both conversion and pricing power.",
+            parsed.amenities ||
+            mappedFromArray.amenities ||
+            "Your amenities are supporting the listing reasonably well against similar properties.",
         trust:
-            "Your trust signals may still be limiting guest confidence. If a listing does not feel fully reassuring at a glance, guests are more likely to hesitate or choose a better-established alternative.",
+            parsed.trust ||
+            mappedFromArray.trust ||
+            "Your trust signals are helping guests feel more confident about booking.",
         competitive_positioning:
-            "Your listing may not be communicating its value sharply enough. If guests cannot quickly see why this property deserves the price, visibility and conversion are both likely to suffer.",
+            parsed.competitive_positioning ||
+            mappedFromArray.competitive_positioning ||
+            "Your listing is communicating its value reasonably clearly against competing properties.",
     }
 }
 
