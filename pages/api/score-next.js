@@ -316,7 +316,7 @@ const AMENITY_SCORING_TABLE = [
   { key: "smoke_alarm", patterns: ["smoke alarm", "smoke detector"], positive: 3, penalty: -3 },
   { key: "first_aid_kit", patterns: ["first aid kit"], positive: 3, penalty: -3 },
   { key: "fire_extinguisher", patterns: ["fire extinguisher"], positive: 3, penalty: -3 },
-  { key: "kitchen", patterns: ["kitchen"], positive: 4, penalty: -4 },
+  { key: "kitchen", patterns: ["kitchen"], positive: 1, penalty: 0 },
   { key: "air_con", patterns: ["air conditioning", "air con", "aircon"], positive: 4, penalty: -2 },
   { key: "tv", patterns: ["tv", "television"], positive: 4, penalty: -2 },
   { key: "washing_machine", patterns: ["washer", "washing machine"], positive: 4, penalty: -1 },
@@ -329,7 +329,7 @@ const AMENITY_SCORING_TABLE = [
   ];
 
 const AMENITY_TABLE_MAX_POSITIVE = AMENITY_SCORING_TABLE.reduce((sum, item) => sum + item.positive, 0);
-const AMENITY_INTERNAL_MAX = 50 + AMENITY_TABLE_MAX_POSITIVE;
+const AMENITY_INTERNAL_MAX = 75 + AMENITY_TABLE_MAX_POSITIVE;
 
 const AMENITY_LABELS = {
     wifi: "WiFi", free_parking: "free parking", hot_tub: "a hot tub",
@@ -356,7 +356,7 @@ function scoreAmenities(property) {
     const amenityTitles = normaliseAmenityTitles(property?.amenities || []);
     const amenityCount = amenityTitles.length;
 
-  const countBonus = amenityCount > 40 ? 50 : 0;
+  const countBonus = amenityCount > 40 ? 75 : 0;
 
   let itemScore = 0;
     const present = [];
@@ -394,7 +394,7 @@ function scoreAmenities(property) {
 }
 
 // -----------------------------
-// 5. Trust Signals (internal max 100)
+// 5. Trust Signals (internal max 100, best-case sum 145, clamped)
 // -----------------------------
 function scoreTrust(property, amenityTitles) {
     const rating = extractRating(property);
@@ -402,28 +402,35 @@ function scoreTrust(property, amenityTitles) {
     const host = property?.host || {};
 
   let reviewVolumeScore = 0;
-    if (reviewCount >= 100) reviewVolumeScore = 25;
-    else if (reviewCount >= 50) reviewVolumeScore = 20;
-    else if (reviewCount >= 30) reviewVolumeScore = 10;
-    else if (reviewCount >= 20) reviewVolumeScore = 5;
+    if (reviewCount >= 100) reviewVolumeScore = 50;
+    else if (reviewCount >= 75) reviewVolumeScore = 40;
+    else if (reviewCount >= 50) reviewVolumeScore = 30;
+    else if (reviewCount >= 40) reviewVolumeScore = 25;
+    else if (reviewCount >= 35) reviewVolumeScore = 20;
+    else if (reviewCount >= 30) reviewVolumeScore = 15;
+    else if (reviewCount >= 25) reviewVolumeScore = 12;
+    else if (reviewCount >= 20) reviewVolumeScore = 10;
+    else if (reviewCount >= 15) reviewVolumeScore = 7;
     else if (reviewCount >= 10) reviewVolumeScore = 3;
     else reviewVolumeScore = 0;
 
   let ratingScore = 0;
-    if (rating >= 4.91) ratingScore = 25;
+    if (rating >= 4.95) ratingScore = 50;
+    else if (rating >= 4.90) ratingScore = 45;
     else if (rating >= 4.87) ratingScore = 20;
-    else if (rating >= 4.8) ratingScore = 10;
-    else if (rating >= 4.7) ratingScore = 3;
-    else if (rating >= 4.6) ratingScore = 1;
+    else if (rating >= 4.84) ratingScore = 15;
+    else if (rating >= 4.80) ratingScore = 7;
+    else if (rating >= 4.70) ratingScore = 5;
+    else if (rating >= 4.60) ratingScore = 1;
     else ratingScore = 0;
 
-  const superhostScore = host.isSuperhost ? 20 : 0;
+  const superhostScore = host.isSuperhost ? 25 : -25;
 
   const yearsHosting = safeNumber(host.yearsHosting);
-    const yearsActiveScore = yearsHosting >= 2 ? 20 : 0;
+    const yearsActiveScore = yearsHosting >= 2 ? 10 : 0;
 
   const responseTimeRaw = String(host.responseTime || host.response_time || host.responseRate || "").toLowerCase();
-    const respondsQuickly = responseTimeRaw.includes("within an hour") || responseTimeRaw.includes("within 1 hour") || responseTimeRaw.includes("< 1 hour") || responseTimeRaw.includes("less than an hour");
+    const respondsQuickly = responseTimeRaw.includes("within an hour") || responseTimeRaw.includes("within 1 hour") || responseTimeRaw.includes("< 1 hour") || responseTimeRaw.includes("less than an hour") || responseTimeRaw.includes("within two hours") || responseTimeRaw.includes("within 2 hours") || responseTimeRaw.includes("< 2 hour");
     const responseTimeScore = respondsQuickly ? 10 : 0;
 
   let safetyDeduction = 0;
@@ -439,7 +446,7 @@ function scoreTrust(property, amenityTitles) {
 }
 
 // -----------------------------
-// 6. Competitive Positioning (internal max 85, based on AirROI rates data)
+// 6. Competitive Positioning (internal max 90, based on AirROI rates data)
 // -----------------------------
 function scoreCompetitivePositioning(ratesData) {
     const rates = Array.isArray(ratesData) ? ratesData : [];
@@ -447,7 +454,7 @@ function scoreCompetitivePositioning(ratesData) {
     let total = 0;
 
     if (rates.length === 0) {
-        return { score: 0, internal: 0, max: 85, noData: true, signals };
+        return { score: 0, internal: 0, max: 90, noData: true, signals };
     }
 
     const today = new Date();
@@ -514,27 +521,34 @@ function scoreCompetitivePositioning(ratesData) {
     total += signals.flatPricingDetection;
 
     // --- Availability windows ---
-    const avail0to10 = ratesInRange(0, 10);
+    const avail1to5 = ratesInRange(1, 5);
+    const avail5to10 = ratesInRange(5, 10);
     const avail10to20 = ratesInRange(10, 20);
     const avail20to30 = ratesInRange(20, 30);
     const avail30to60 = ratesInRange(30, 60);
 
-    const pct0to10 = availabilityPct(avail0to10);
-    if (pct0to10 < 0.25) signals.avail0to10 = 20;
-    else if (pct0to10 <= 0.50) signals.avail0to10 = -10;
-    else signals.avail0to10 = -25;
-    total += signals.avail0to10;
+    const pct1to5 = availabilityPct(avail1to5);
+    if (pct1to5 < 0.25) signals.avail1to5 = 0;
+    else if (pct1to5 <= 0.50) signals.avail1to5 = -15;
+    else signals.avail1to5 = -25;
+    total += signals.avail1to5;
+
+    const pct5to10 = availabilityPct(avail5to10);
+    if (pct5to10 < 0.25) signals.avail5to10 = 20;
+    else if (pct5to10 <= 0.50) signals.avail5to10 = -10;
+    else signals.avail5to10 = -20;
+    total += signals.avail5to10;
 
     const pct10to20 = availabilityPct(avail10to20);
     if (pct10to20 < 0.25) signals.avail10to20 = 20;
     else if (pct10to20 <= 0.50) signals.avail10to20 = 5;
-    else signals.avail10to20 = -20;
+    else signals.avail10to20 = -15;
     total += signals.avail10to20;
 
     const pct20to30 = availabilityPct(avail20to30);
-    if (pct20to30 < 0.25) signals.avail20to30 = 5;
-    else if (pct20to30 <= 0.50) signals.avail20to30 = -5;
-    else signals.avail20to30 = -15;
+    if (pct20to30 < 0.25) signals.avail20to30 = 10;
+    else if (pct20to30 <= 0.50) signals.avail20to30 = 0;
+    else signals.avail20to30 = -10;
     total += signals.avail20to30;
 
     const pct30to60 = availabilityPct(avail30to60);
@@ -606,12 +620,12 @@ function scoreCompetitivePositioning(ratesData) {
     total += signals.minimumStay;
 
     // Internal max is 85 (sum of all best-case positive signals)
-    const internal = clamp(total, 0, 85);
+    const internal = clamp(total, 0, 90);
 
     return {
         score: internal,
         internal,
-        max: 85,
+        max: 90,
         noData: false,
         signals,
         meta: {
@@ -624,7 +638,8 @@ function scoreCompetitivePositioning(ratesData) {
             avgMinNights: avgMinNights !== null ? Number(avgMinNights.toFixed(1)) : null,
             maxConsecutiveAvailable,
             availPct: {
-                next10: Number(pct0to10.toFixed(2)),
+                next1to5: Number(pct1to5.toFixed(2)),
+                next5to10: Number(pct5to10.toFixed(2)),
                 next10to20: Number(pct10to20.toFixed(2)),
                 next20to30: Number(pct20to30.toFixed(2)),
                 next30to60: Number(pct30to60.toFixed(2)),
@@ -810,7 +825,7 @@ function buildCompetitiveMessage(weightedScore, maxWeight, data) {
         const minText = avgMin ? ` (averaging ${avgMin} nights)` : "";
         issues.push(`your minimum stay requirement is high${minText}, which significantly reduces the pool of guests who can book`);
     }
-    if (data.signals.avail0to10 < 0) {
+    if (data.signals.avail1to5 < 0 || data.signals.avail5to10 < 0) {
         issues.push("your near-term availability (next 10 days) is wide open, which often indicates pricing issues or weak demand signals");
     }
     if (issues.length === 0) {
