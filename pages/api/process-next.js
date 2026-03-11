@@ -6,7 +6,8 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET;
 const HASDATA_API_KEY = process.env.HASDATA_API_KEY;
 const HASDATA_PROPERTY_API_URL = process.env.HASDATA_PROPERTY_API_URL;
-const HASDATA_SCRAPING_API_URL = "https://api.hasdata.com/scrape/web";
+const WEXTRACTOR_AUTH_TOKEN = process.env.WEXTRACTOR_AUTH_TOKEN;
+const WEXTRACTOR_AIRBNB_URL = "https://wextractor.com/api/v1/reviews/airbnb";
 const AIRROI_API_KEY = process.env.AIRROI_API_KEY;
 const AIRROI_RATES_URL = "https://api.airroi.com/listings/future/rates";
 
@@ -564,93 +565,85 @@ async function fetchHasDataProperty(normalisedUrl) {
   };
 }
 
-async function fetchHasDataReviews(normalisedUrl) {
-  if (!HASDATA_API_KEY) {
-    return { ok: false, reviews: [], error: "Missing HASDATA_API_KEY" };
+async function fetchWextractorReviews(normalisedUrl) {
+  if (!WEXTRACTOR_AUTH_TOKEN) {
+    return { ok: false, reviews: [], error: "Missing WEXTRACTOR_AUTH_TOKEN" };
   }
 
-  // Construct reviews URL: https://www.airbnb.com/rooms/{id}/reviews
-  const reviewsUrl = normalisedUrl.replace(/\/?$/, "/reviews");
+  // Extract Airbnb listing ID from URL (e.g. https://www.airbnb.com/rooms/30748041)
+  const listingIdMatch = normalisedUrl.match(/\/rooms\/(\d+)/);
+  if (!listingIdMatch) {
+    return { ok: false, reviews: [], error: "Could not extract listing ID from URL", requestUrl: normalisedUrl };
+  }
+  const listingId = listingIdMatch[1];
+
+  const allReviews = [];
+  const maxPages = 5; // 10 reviews per page × 5 pages = up to 50 reviews
+  let requestUrl = "";
 
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 90000);
+    for (let page = 0; page < maxPages; page++) {
+      const offset = page * 10;
+      requestUrl = `${WEXTRACTOR_AIRBNB_URL}?${new URLSearchParams({
+        id: listingId,
+        auth_token: WEXTRACTOR_AUTH_TOKEN,
+        offset: String(offset),
+      }).toString()}`;
 
-    const response = await fetch(HASDATA_SCRAPING_API_URL, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": HASDATA_API_KEY,
-      },
-      body: JSON.stringify({
-        url: reviewsUrl,
-        jsRendering: true,
-        wait: 5000,
-        proxyType: "residential",
-        proxyCountry: "US",
-        blockAds: true,
-        aiExtractRules: {
-          reviews: {
-            type: "list",
-            description:
-              "The 30 most recent guest reviews on this page, sorted newest first.",
-            output: {
-              reviewer_name: { type: "string", description: "The guest name" },
-              date: { type: "string", description: "When the review was posted" },
-              text: { type: "string", description: "The full review comment text" },
-            },
-          },
-        },
-      }),
-    });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
 
-    clearTimeout(timeout);
+      const response = await fetch(requestUrl, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        signal: controller.signal,
+      });
 
-    let raw;
-    try {
-      raw = await response.json();
-    } catch {
-      const text = await response.text().catch(() => "(unreadable)");
-      console.error("[reviews] Non-JSON response from HasData scraping API", { status: response.status, contentType: response.headers.get("content-type"), bodyPreview: text.slice(0, 500) });
-      return { ok: false, reviews: [], error: `Non-JSON response from HasData scraping API (status ${response.status})`, requestUrl: reviewsUrl };
-    }
+      clearTimeout(timeout);
 
-    if (!response.ok) {
-      return { ok: false, reviews: [], error: `HasData scraping API returned ${response.status}`, raw, requestUrl: reviewsUrl };
-    }
+      let raw;
+      try {
+        raw = await response.json();
+      } catch {
+        console.error("[reviews] Non-JSON response from Wextractor", { status: response.status, offset });
+        break;
+      }
 
-    // aiExtractRules returns results under raw.aiExtractRules or raw.data
-    const aiResults = raw?.aiExtractRules || raw?.data?.aiExtractRules || raw;
-    const reviewList = aiResults?.reviews || [];
-
-    const reviews = (Array.isArray(reviewList) ? reviewList : [])
-      .slice(0, 30)
-      .map((item) => {
-        if (typeof item === "string") {
-          return { text: item };
+      if (!response.ok) {
+        if (page === 0) {
+          return { ok: false, reviews: [], error: `Wextractor returned ${response.status}`, raw, requestUrl };
         }
+        break;
+      }
+
+      const pageReviews = Array.isArray(raw?.reviews) ? raw.reviews : [];
+      if (pageReviews.length === 0) break;
+
+      for (const item of pageReviews) {
         if (item && typeof item === "object") {
-          return {
-            text: item.text || item.comment || item.body || item.review || "",
-            reviewer_name: item.reviewer_name || item.name || null,
-            created_at: item.date || item.created_at || null,
-          };
+          allReviews.push({
+            text: item.text || "",
+            reviewer_name: item.reviewer || null,
+            created_at: item.datetime || null,
+            rating: item.rating != null ? Number(item.rating) : null,
+          });
         }
-        return null;
-      })
-      .filter((r) => r && r.text);
+      }
 
-    // Strip the raw page content from stored response to save DB space
-    const storedRaw = { ...raw };
-    delete storedRaw.html;
-    delete storedRaw.text;
-    delete storedRaw.markdown;
-    delete storedRaw.content;
+      // If fewer than 10 returned, no more pages
+      if (pageReviews.length < 10) break;
+    }
 
-    return { ok: true, reviews, raw: storedRaw, requestUrl: reviewsUrl };
+    const reviews = allReviews.filter((r) => r.text);
+
+    return {
+      ok: reviews.length > 0,
+      reviews,
+      raw: { review_count: reviews.length, provider: "wextractor" },
+      requestUrl: `${WEXTRACTOR_AIRBNB_URL}?id=${listingId}`,
+    };
   } catch (err) {
-    return { ok: false, reviews: [], error: err.message, requestUrl: reviewsUrl };
+    return { ok: false, reviews: allReviews.filter((r) => r.text), error: err.message, requestUrl };
   }
 }
 
@@ -1080,12 +1073,12 @@ export default async function handler(req, res) {
         const needsReviewScrape = !existingReviews || (Array.isArray(existingReviews) && existingReviews.length === 0);
 
         if (needsReviewScrape) {
-          const reviewResult = await fetchHasDataReviews(submission.normalised_url);
+          const reviewResult = await fetchWextractorReviews(submission.normalised_url);
 
           await insertFetchRow({
             submissionId: submission.id,
             fetchStatus: reviewResult.ok ? "success" : "failed",
-            provider: "hasdata-review-content",
+            provider: "wextractor-review-content",
             requestUrl: reviewResult.requestUrl,
             rawResponse: reviewResult.raw || { error: reviewResult.error },
           });
