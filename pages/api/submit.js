@@ -144,7 +144,7 @@ export default async function handler(req, res) {
       });
     }
 
-    const { name, email, listing_url, marketing_consent, tier: requestedTier } = req.body || {};
+    const { name, email, listing_url, marketing_consent, tier: requestedTier, phone } = req.body || {};
 
     if (!name || !email || !listing_url) {
       return res.status(400).json({
@@ -173,6 +173,14 @@ export default async function handler(req, res) {
     const validTiers = ["free", "pro", "premium"];
     const tier = validTiers.includes(requestedTier) ? requestedTier : "free";
 
+    const trimmedPhone = phone ? String(phone).trim() : null;
+
+    if ((tier === "pro" || tier === "premium") && !trimmedPhone) {
+      return res.status(400).json({
+        error: "A phone number is required for pro submissions.",
+      });
+    }
+
     const marketingConsentBool = parseMarketingConsent(marketing_consent);
 
     if (!marketingConsentBool) {
@@ -196,6 +204,7 @@ export default async function handler(req, res) {
       normalised_url: normalisedUrl,
       airbnb_listing_id: airbnbListingId,
       marketing_consent: marketingConsentBool,
+      phone: trimmedPhone,
     };
 
     const { data: submission, error: submissionError } = await supabase
