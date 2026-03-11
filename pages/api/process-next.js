@@ -574,7 +574,7 @@ async function fetchHasDataReviews(normalisedUrl) {
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 45000);
+    const timeout = setTimeout(() => controller.abort(), 90000);
 
     const response = await fetch(HASDATA_SCRAPING_API_URL, {
       method: "POST",
@@ -586,17 +586,24 @@ async function fetchHasDataReviews(normalisedUrl) {
       body: JSON.stringify({
         url: reviewsUrl,
         jsRendering: true,
-        wait: 10000,
+        waitFor: "[data-review-id], [data-testid='review']",
+        wait: 5000,
         proxyType: "residential",
         proxyCountry: "US",
+        blockResources: true,
         blockAds: true,
         removeBase64Images: true,
-        outputFormat: ["json"],
+        excludeTags: [
+          "header", "footer", "nav", "script", "style", "svg", "img",
+          "iframe", "video", "noscript", "[data-testid='book-it']",
+          "[data-testid='photo-viewer']",
+        ],
+        outputFormat: ["text"],
         aiExtractRules: {
           reviews: {
             type: "list",
             description:
-              "The 50 most recent guest reviews on this page, sorted newest first.",
+              "The 30 most recent guest reviews on this page, sorted newest first.",
             output: {
               reviewer_name: { type: "string", description: "The guest name" },
               date: { type: "string", description: "When the review was posted" },
@@ -627,7 +634,7 @@ async function fetchHasDataReviews(normalisedUrl) {
     const reviewList = aiResults?.reviews || [];
 
     const reviews = (Array.isArray(reviewList) ? reviewList : [])
-      .slice(0, 50)
+      .slice(0, 30)
       .map((item) => {
         if (typeof item === "string") {
           return { text: item };
@@ -643,7 +650,14 @@ async function fetchHasDataReviews(normalisedUrl) {
       })
       .filter((r) => r && r.text);
 
-    return { ok: true, reviews, raw, requestUrl: reviewsUrl };
+    // Strip the raw page content from stored response to save DB space
+    const storedRaw = { ...raw };
+    delete storedRaw.html;
+    delete storedRaw.text;
+    delete storedRaw.markdown;
+    delete storedRaw.content;
+
+    return { ok: true, reviews, raw: storedRaw, requestUrl: reviewsUrl };
   } catch (err) {
     return { ok: false, reviews: [], error: err.message, requestUrl: reviewsUrl };
   }
