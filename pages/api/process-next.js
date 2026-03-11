@@ -591,7 +591,12 @@ async function fetchHasDataReviews(normalisedUrl) {
           reviews: {
             type: "list",
             description:
-              "The 50 most recent guest reviews on this page, sorted newest first. For each review extract: reviewer_name (the guest name), date (when the review was posted), text (the full review comment text).",
+              "The 50 most recent guest reviews on this page, sorted newest first.",
+            output: {
+              reviewer_name: { type: "string", description: "The guest name" },
+              date: { type: "string", description: "When the review was posted" },
+              text: { type: "string", description: "The full review comment text" },
+            },
           },
         },
       }),
