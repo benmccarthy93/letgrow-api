@@ -1,5 +1,8 @@
 {
   "functions": {
+    "pages/api/process-next.js": {
+      "maxDuration": 60
+    },
     "pages/api/process-listing.js": {
       "experimentalTriggers": [
         {

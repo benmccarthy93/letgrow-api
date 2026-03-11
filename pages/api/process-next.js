@@ -573,8 +573,12 @@ async function fetchHasDataReviews(normalisedUrl) {
   const reviewsUrl = normalisedUrl.replace(/\/?$/, "/reviews");
 
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45000);
+
     const response = await fetch(HASDATA_SCRAPING_API_URL, {
       method: "POST",
+      signal: controller.signal,
       headers: {
         "Content-Type": "application/json",
         "x-api-key": HASDATA_API_KEY,
@@ -582,7 +586,9 @@ async function fetchHasDataReviews(normalisedUrl) {
       body: JSON.stringify({
         url: reviewsUrl,
         jsRendering: true,
-        wait: 5000,
+        wait: 10000,
+        proxyType: "residential",
+        proxyCountry: "US",
         blockAds: true,
         removeBase64Images: true,
         outputFormat: ["json"],
@@ -600,6 +606,8 @@ async function fetchHasDataReviews(normalisedUrl) {
         },
       }),
     });
+
+    clearTimeout(timeout);
 
     let raw;
     try {
