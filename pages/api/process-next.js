@@ -574,7 +574,7 @@ async function fetchHasDataReviews(normalisedUrl) {
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 45000);
+    const timeout = setTimeout(() => controller.abort(), 90000);
 
     const response = await fetch(HASDATA_SCRAPING_API_URL, {
       method: "POST",
@@ -592,11 +592,12 @@ async function fetchHasDataReviews(normalisedUrl) {
         blockAds: true,
         removeBase64Images: true,
         outputFormat: ["json"],
+        extractOnlyAiRules: true,
         aiExtractRules: {
           reviews: {
             type: "list",
             description:
-              "The 50 most recent guest reviews on this page, sorted newest first.",
+              "The 30 most recent guest reviews on this page, sorted newest first.",
             output: {
               reviewer_name: { type: "string", description: "The guest name" },
               date: { type: "string", description: "When the review was posted" },
