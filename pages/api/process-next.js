@@ -586,13 +586,19 @@ async function fetchHasDataReviews(normalisedUrl) {
       body: JSON.stringify({
         url: reviewsUrl,
         jsRendering: true,
-        wait: 10000,
+        waitFor: "[data-review-id], [data-testid='review']",
+        wait: 5000,
         proxyType: "residential",
         proxyCountry: "US",
+        blockResources: true,
         blockAds: true,
         removeBase64Images: true,
-        outputFormat: ["json"],
-        extractOnlyAiRules: true,
+        excludeTags: [
+          "header", "footer", "nav", "script", "style", "svg", "img",
+          "iframe", "video", "noscript", "[data-testid='book-it']",
+          "[data-testid='photo-viewer']",
+        ],
+        outputFormat: ["text"],
         aiExtractRules: {
           reviews: {
             type: "list",
@@ -628,7 +634,7 @@ async function fetchHasDataReviews(normalisedUrl) {
     const reviewList = aiResults?.reviews || [];
 
     const reviews = (Array.isArray(reviewList) ? reviewList : [])
-      .slice(0, 50)
+      .slice(0, 30)
       .map((item) => {
         if (typeof item === "string") {
           return { text: item };
@@ -644,7 +650,14 @@ async function fetchHasDataReviews(normalisedUrl) {
       })
       .filter((r) => r && r.text);
 
-    return { ok: true, reviews, raw, requestUrl: reviewsUrl };
+    // Strip the raw page content from stored response to save DB space
+    const storedRaw = { ...raw };
+    delete storedRaw.html;
+    delete storedRaw.text;
+    delete storedRaw.markdown;
+    delete storedRaw.content;
+
+    return { ok: true, reviews, raw: storedRaw, requestUrl: reviewsUrl };
   } catch (err) {
     return { ok: false, reviews: [], error: err.message, requestUrl: reviewsUrl };
   }
