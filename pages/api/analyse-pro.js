@@ -1,6 +1,7 @@
 // /pages/api/analyse-pro.js
 import { createClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
+import { queueEmail } from "./lib/email-queue.js";
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -659,6 +660,19 @@ export default async function handler(req, res) {
         if (updateErr) {
             console.error("Analysis update error:", updateErr);
             return res.status(500).json({ error: "Failed to save analysis results" });
+        }
+
+        // Queue email with tier-based delay (pro: 2-3.5hrs, premium: 2-8hrs)
+        try {
+            await queueEmail(supabase, {
+                submissionId: submission.id,
+                jobId: submission.job_id,
+                tier: submission.tier || "pro",
+                recipientEmail: submission.email,
+                recipientName: submission.full_name,
+            });
+        } catch (emailErr) {
+            console.error("Failed to queue pro/premium email:", emailErr);
         }
 
         return res.status(200).json({
