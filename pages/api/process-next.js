@@ -583,10 +583,9 @@ async function fetchHasDataReviews(normalisedUrl) {
         url: reviewsUrl,
         jsRendering: true,
         wait: 5000,
-        blockResources: true,
         blockAds: true,
         removeBase64Images: true,
-        outputFormat: ["markdown"],
+        outputFormat: ["json"],
         aiExtractRules: {
           reviews: {
             type: "list",
@@ -606,7 +605,9 @@ async function fetchHasDataReviews(normalisedUrl) {
     try {
       raw = await response.json();
     } catch {
-      return { ok: false, reviews: [], error: "Non-JSON response from HasData scraping API", requestUrl: reviewsUrl };
+      const text = await response.text().catch(() => "(unreadable)");
+      console.error("[reviews] Non-JSON response from HasData scraping API", { status: response.status, contentType: response.headers.get("content-type"), bodyPreview: text.slice(0, 500) });
+      return { ok: false, reviews: [], error: `Non-JSON response from HasData scraping API (status ${response.status})`, requestUrl: reviewsUrl };
     }
 
     if (!response.ok) {
