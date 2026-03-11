@@ -6,6 +6,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET;
 const HASDATA_API_KEY = process.env.HASDATA_API_KEY;
 const HASDATA_PROPERTY_API_URL = process.env.HASDATA_PROPERTY_API_URL;
+const HASDATA_SCRAPING_API_URL = "https://api.hasdata.com/scrape/web";
 const AIRROI_API_KEY = process.env.AIRROI_API_KEY;
 const AIRROI_RATES_URL = "https://api.airroi.com/listings/future/rates";
 
@@ -563,6 +564,77 @@ async function fetchHasDataProperty(normalisedUrl) {
   };
 }
 
+async function fetchHasDataReviews(normalisedUrl) {
+  if (!HASDATA_API_KEY) {
+    return { ok: false, reviews: [], error: "Missing HASDATA_API_KEY" };
+  }
+
+  // Construct reviews URL: https://www.airbnb.com/rooms/{id}/reviews
+  const reviewsUrl = normalisedUrl.replace(/\/?$/, "/reviews");
+
+  try {
+    const response = await fetch(HASDATA_SCRAPING_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": HASDATA_API_KEY,
+      },
+      body: JSON.stringify({
+        url: reviewsUrl,
+        jsRendering: true,
+        wait: 5000,
+        blockResources: true,
+        blockAds: true,
+        removeBase64Images: true,
+        outputFormat: ["markdown"],
+        aiExtractRules: {
+          reviews: {
+            type: "list",
+            description:
+              "The 50 most recent guest reviews on this page, sorted newest first. For each review extract: reviewer_name (the guest name), date (when the review was posted), text (the full review comment text).",
+          },
+        },
+      }),
+    });
+
+    let raw;
+    try {
+      raw = await response.json();
+    } catch {
+      return { ok: false, reviews: [], error: "Non-JSON response from HasData scraping API", requestUrl: reviewsUrl };
+    }
+
+    if (!response.ok) {
+      return { ok: false, reviews: [], error: `HasData scraping API returned ${response.status}`, raw, requestUrl: reviewsUrl };
+    }
+
+    // aiExtractRules returns results under raw.aiExtractRules or raw.data
+    const aiResults = raw?.aiExtractRules || raw?.data?.aiExtractRules || raw;
+    const reviewList = aiResults?.reviews || [];
+
+    const reviews = (Array.isArray(reviewList) ? reviewList : [])
+      .slice(0, 50)
+      .map((item) => {
+        if (typeof item === "string") {
+          return { text: item };
+        }
+        if (item && typeof item === "object") {
+          return {
+            text: item.text || item.comment || item.body || item.review || "",
+            reviewer_name: item.reviewer_name || item.name || null,
+            created_at: item.date || item.created_at || null,
+          };
+        }
+        return null;
+      })
+      .filter((r) => r && r.text);
+
+    return { ok: true, reviews, raw, requestUrl: reviewsUrl };
+  } catch (err) {
+    return { ok: false, reviews: [], error: err.message, requestUrl: reviewsUrl };
+  }
+}
+
 async function fetchAirRoiFutureRates(airbnbListingId) {
   if (!AIRROI_API_KEY) {
     return { ok: false, status: 0, requestUrl: null, raw: { error: "Missing AIRROI_API_KEY env var" } };
@@ -970,6 +1042,43 @@ export default async function handler(req, res) {
           success: false,
           error: "Failed to store listing snapshot",
         });
+      }
+    }
+
+    // Scrape reviews via HasData web scraping API if property API returned none (non-blocking)
+    if (submission.normalised_url) {
+      try {
+        // Check if the snapshot already has reviews
+        const { data: currentSnapshot } = await supabase
+          .from("listing_snapshots")
+          .select("reviews_excerpt_json")
+          .eq("submission_id", submission.id)
+          .single();
+
+        const existingReviews = currentSnapshot?.reviews_excerpt_json;
+        const needsReviewScrape = !existingReviews || (Array.isArray(existingReviews) && existingReviews.length === 0);
+
+        if (needsReviewScrape) {
+          const reviewResult = await fetchHasDataReviews(submission.normalised_url);
+
+          await insertFetchRow({
+            submissionId: submission.id,
+            fetchStatus: reviewResult.ok ? "success" : "failed",
+            provider: "hasdata-reviews",
+            requestUrl: reviewResult.requestUrl,
+            rawResponse: reviewResult.raw || { error: reviewResult.error },
+          });
+
+          if (reviewResult.ok && reviewResult.reviews.length > 0) {
+            // Only update reviews_excerpt_json; keep review_count from property API (the real total)
+            await supabase
+              .from("listing_snapshots")
+              .update({ reviews_excerpt_json: reviewResult.reviews })
+              .eq("submission_id", submission.id);
+          }
+        }
+      } catch (reviewScrapeError) {
+        console.error("Review scraping error (non-blocking):", reviewScrapeError);
       }
     }
 
