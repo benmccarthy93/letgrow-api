@@ -583,10 +583,9 @@ async function fetchHasDataReviews(normalisedUrl) {
         url: reviewsUrl,
         jsRendering: true,
         wait: 5000,
-        blockResources: true,
         blockAds: true,
         removeBase64Images: true,
-        outputFormat: ["markdown"],
+        outputFormat: ["json"],
         aiExtractRules: {
           reviews: {
             type: "list",
@@ -606,7 +605,9 @@ async function fetchHasDataReviews(normalisedUrl) {
     try {
       raw = await response.json();
     } catch {
-      return { ok: false, reviews: [], error: "Non-JSON response from HasData scraping API", requestUrl: reviewsUrl };
+      const text = await response.text().catch(() => "(unreadable)");
+      console.error("[reviews] Non-JSON response from HasData scraping API", { status: response.status, contentType: response.headers.get("content-type"), bodyPreview: text.slice(0, 500) });
+      return { ok: false, reviews: [], error: `Non-JSON response from HasData scraping API (status ${response.status})`, requestUrl: reviewsUrl };
     }
 
     if (!response.ok) {
@@ -1050,8 +1051,10 @@ export default async function handler(req, res) {
       }
     }
 
-    // Scrape reviews via HasData web scraping API if property API returned none (non-blocking)
-    if (submission.normalised_url) {
+    // Scrape review content for Pro/Premium analysis (non-blocking)
+    // Review COUNT is already available from the property API for all tiers
+    const isPaidTier = submission.tier === "pro" || submission.tier === "premium";
+    if (isPaidTier && submission.normalised_url) {
       try {
         // Check if the snapshot already has reviews
         const { data: currentSnapshot } = await supabase
@@ -1069,7 +1072,7 @@ export default async function handler(req, res) {
           await insertFetchRow({
             submissionId: submission.id,
             fetchStatus: reviewResult.ok ? "success" : "failed",
-            provider: "hasdata-reviews",
+            provider: "hasdata-review-content",
             requestUrl: reviewResult.requestUrl,
             rawResponse: reviewResult.raw || { error: reviewResult.error },
           });
