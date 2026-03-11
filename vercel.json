@@ -3,6 +3,9 @@
     "pages/api/process-next.js": {
       "maxDuration": 60
     },
+    "pages/api/send-emails.js": {
+      "maxDuration": 60
+    },
     "pages/api/process-listing.js": {
       "experimentalTriggers": [
         {
@@ -11,5 +14,11 @@
         }
       ]
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/send-emails",
+      "schedule": "*/5 * * * *"
+    }
+  ]
 }
