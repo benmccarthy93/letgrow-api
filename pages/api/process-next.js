@@ -598,7 +598,7 @@ async function fetchHasDataReviews(normalisedUrl) {
           "iframe", "video", "noscript", "[data-testid='book-it']",
           "[data-testid='photo-viewer']",
         ],
-        outputFormat: ["text"],
+        outputFormat: ["json"],
         aiExtractRules: {
           reviews: {
             type: "list",
