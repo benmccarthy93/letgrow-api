@@ -586,19 +586,10 @@ async function fetchHasDataReviews(normalisedUrl) {
       body: JSON.stringify({
         url: reviewsUrl,
         jsRendering: true,
-        waitFor: "[data-review-id], [data-testid='review']",
         wait: 5000,
         proxyType: "residential",
         proxyCountry: "US",
-        blockResources: true,
         blockAds: true,
-        removeBase64Images: true,
-        excludeTags: [
-          "header", "footer", "nav", "script", "style", "svg", "img",
-          "iframe", "video", "noscript", "[data-testid='book-it']",
-          "[data-testid='photo-viewer']",
-        ],
-        outputFormat: ["json"],
         aiExtractRules: {
           reviews: {
             type: "list",
