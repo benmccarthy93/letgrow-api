@@ -6,6 +6,7 @@ const POLL_INTERVAL = 15000;
 const STAGE_ORDER = ["submitted", "fetch_start", "fetched", "scored", "analysis", "complete", "email_queued", "email_sent"];
 
 function stageBadge(status, pipeline, tier) {
+    if (status === "failed" && tier !== "free" && pipeline?.analysis?.status !== "complete") return { label: "ANALYSIS FAILED", color: "#DC2626", bg: "#FEE2E2" };
     if (status === "failed") return { label: "FAILED", color: "#DC2626", bg: "#FEE2E2" };
     if (status === "complete" && pipeline?.email?.status === "sent") return { label: "SENT", color: "#15803D", bg: "#DCFCE7" };
     if (status === "complete" && pipeline?.email?.status === "pending") return { label: "QUEUED", color: "#B45309", bg: "#FEF3C7" };
@@ -70,7 +71,7 @@ function PipelineSteps({ status, pipeline }) {
     );
 }
 
-function SubmissionRow({ sub, onForce, onDetail, forcing }) {
+function SubmissionRow({ sub, onForce, onDetail, onRetry, forcing, retrying }) {
     const stage = stageBadge(sub.status, sub.pipeline, sub.tier);
     const tier = tierBadge(sub.tier);
     const isStuck = sub.status !== "complete" && sub.status !== "failed" && sub.duration_seconds > 900;
@@ -114,6 +115,15 @@ function SubmissionRow({ sub, onForce, onDetail, forcing }) {
                 {(() => {
                     const reportReady = sub.status === "complete" || (sub.status === "scored" && sub.tier === "free");
                     const reportInProgress = sub.status === "scored" && sub.tier !== "free";
+                    const analysisStuck = reportInProgress && sub.duration_seconds > 300;
+                    const analysisFailed = sub.status === "failed" && sub.tier !== "free" && sub.pipeline?.analysis?.status !== "complete";
+                    if (analysisStuck || analysisFailed) {
+                        return (
+                            <button onClick={() => onRetry(sub.job_id)} disabled={retrying === sub.job_id} style={{ ...btnSmall, marginLeft: 4, background: "#FEE2E2", color: "#DC2626" }}>
+                                {retrying === sub.job_id ? "..." : "Retry Analysis"}
+                            </button>
+                        );
+                    }
                     if (reportInProgress) {
                         return (
                             <span style={{ marginLeft: 4, fontSize: 11, color: "#7C3AED", fontWeight: 500 }}>
@@ -235,6 +245,7 @@ export default function AdminDashboard() {
     const [error, setError] = useState(null);
     const [filter, setFilter] = useState({ status: "", tier: "", limit: 50 });
     const [forcing, setForcing] = useState(null);
+    const [retrying, setRetrying] = useState(null);
     const [detail, setDetail] = useState(null);
     const [lastRefresh, setLastRefresh] = useState(null);
 
@@ -280,6 +291,18 @@ export default function AdminDashboard() {
             sessionStorage.setItem("lg_admin_secret", secret);
         } catch {
             setError("Invalid secret");
+        }
+    };
+
+    const handleRetry = async (jobId) => {
+        setRetrying(jobId);
+        try {
+            await apiCall("retry-analysis", { job_id: jobId });
+            await refresh();
+        } catch (err) {
+            alert(`Retry failed: ${err.message}`);
+        } finally {
+            setRetrying(null);
         }
     };
 
@@ -429,7 +452,7 @@ export default function AdminDashboard() {
                             </thead>
                             <tbody>
                                 {submissions.map((sub) => (
-                                    <SubmissionRow key={sub.id} sub={sub} onForce={handleForce} onDetail={handleDetail} forcing={forcing} />
+                                    <SubmissionRow key={sub.id} sub={sub} onForce={handleForce} onRetry={handleRetry} onDetail={handleDetail} forcing={forcing} retrying={retrying} />
                                 ))}
                                 {submissions.length === 0 && !loading && (
                                     <tr><td colSpan={9} style={{ padding: 40, textAlign: "center", color: "#9CA3AF", fontSize: 14 }}>No submissions found</td></tr>
