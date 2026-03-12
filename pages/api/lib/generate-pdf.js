@@ -5,30 +5,32 @@ import PDFDocument from "pdfkit";
 import { readFileSync } from "fs";
 import { join } from "path";
 
-// Brand colours
-const DARK_GREEN = "#1B4332";
-const GOLD = "#D4A843";
+// Brand colours — derived from the LetGrow logo
+const DARK_GREEN = "#3B6B4A";       // Logo background green
+const DEEP_GREEN = "#2A4F36";       // Darker shade for contrast
+const GOLD = "#C49A4B";             // Logo house-icon gold
+const CREAM = "#EDE3D0";            // Logo text warm cream
 const WHITE = "#FFFFFF";
 const BODY_TEXT = "#333333";
 const LIGHT_GREY = "#F5F5F5";
-const MEDIUM_GREY = "#888888";
-const SECTION_BG = "#F0F4F1";
+const MEDIUM_GREY = "#7A8A7E";      // Greenish grey to stay on-brand
+const SECTION_BG = "#EDF2EE";       // Light tint of brand green
 
-// Score colours
+// Score colours — using brand palette
 function scoreColour(score, max) {
     const pct = max > 0 ? score / max : 0;
-    if (pct >= 0.75) return "#2D6A4F";
-    if (pct >= 0.5) return "#D4A843";
-    if (pct >= 0.25) return "#E76F51";
-    return "#C0392B";
+    if (pct >= 0.75) return DARK_GREEN;
+    if (pct >= 0.5) return GOLD;
+    if (pct >= 0.25) return "#D4785A";   // Warm terracotta
+    return "#B5453A";                     // Muted red
 }
 
 function scoreLabelColour(label) {
     const l = String(label || "").toLowerCase();
-    if (l.includes("excellent")) return "#2D6A4F";
-    if (l.includes("good")) return "#40916C";
-    if (l.includes("fair")) return "#D4A843";
-    if (l.includes("poor") || l.includes("needs")) return "#C0392B";
+    if (l.includes("excellent")) return DEEP_GREEN;
+    if (l.includes("good")) return DARK_GREEN;
+    if (l.includes("fair")) return GOLD;
+    if (l.includes("poor") || l.includes("needs")) return "#B5453A";
     return BODY_TEXT;
 }
 
@@ -122,20 +124,25 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
 
             // ===================== HEADER =====================
             // Dark green header band
-            doc.rect(0, 0, doc.page.width, 100).fill(DARK_GREEN);
+            doc.rect(0, 0, doc.page.width, 100).fill(DEEP_GREEN);
 
-            // Logo — read from file bundled in the repo
-            try {
-                const logoPath = join(process.cwd(), "pages", "api", "lib", "logo.png");
-                const logoBuffer = readFileSync(logoPath);
-                doc.image(logoBuffer, 50, 15, { width: 140 });
-            } catch (e) {
-                console.error("Logo embed error:", e.message);
-                doc.fontSize(22).fillColor(WHITE).text("LETGROW", 50, 30);
+            // Logo — try logo.png then logo-square.png from the repo
+            const libDir = join(process.cwd(), "pages", "api", "lib");
+            let logoLoaded = false;
+            for (const file of ["logo.png", "logo-square.png"]) {
+                try {
+                    const logoBuffer = readFileSync(join(libDir, file));
+                    doc.image(logoBuffer, 50, 15, { height: 70 });
+                    logoLoaded = true;
+                    break;
+                } catch { /* try next */ }
+            }
+            if (!logoLoaded) {
+                doc.fontSize(22).fillColor(CREAM).text("LETGROW", 50, 30);
             }
 
             // Header text
-            doc.fontSize(11).fillColor(WHITE)
+            doc.fontSize(11).fillColor(CREAM)
                 .text("Listing Performance Report", 250, 25, { align: "right", width: 260 })
                 .fontSize(9).fillColor("#B7D4C3")
                 .text(`Prepared for: ${submission.full_name || "Guest"}`, 250, 45, { align: "right", width: 260 })
@@ -304,19 +311,19 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
                     drawSectionHeader(doc, "Review Analysis");
 
                     if (Array.isArray(reviewThemes.positive_themes) && reviewThemes.positive_themes.length > 0) {
-                        doc.fontSize(10).fillColor("#2D6A4F").text("What guests love:");
+                        doc.fontSize(10).fillColor(DARK_GREEN).text("What guests love:");
                         drawBulletList(doc, reviewThemes.positive_themes);
                         doc.moveDown(0.3);
                     }
                     if (Array.isArray(reviewThemes.negative_themes) && reviewThemes.negative_themes.length > 0) {
                         ensureSpace(doc, 30);
-                        doc.fontSize(10).fillColor("#C0392B").text("Areas of concern:");
+                        doc.fontSize(10).fillColor("#B5453A").text("Areas of concern:");
                         drawBulletList(doc, reviewThemes.negative_themes);
                         doc.moveDown(0.3);
                     }
                     if (Array.isArray(reviewThemes.recurring_issues) && reviewThemes.recurring_issues.length > 0) {
                         ensureSpace(doc, 30);
-                        doc.fontSize(10).fillColor("#E76F51").text("Recurring issues:");
+                        doc.fontSize(10).fillColor("#D4785A").text("Recurring issues:");
                         drawBulletList(doc, reviewThemes.recurring_issues);
                     }
                     doc.moveDown(0.5);
@@ -425,8 +432,8 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
                 ensureSpace(doc, 80);
                 doc.moveDown(1);
                 const ctaY = doc.y;
-                doc.roundedRect(50, ctaY, doc.page.width - 100, 60, 8).fill(DARK_GREEN);
-                doc.fontSize(12).fillColor(WHITE)
+                doc.roundedRect(50, ctaY, doc.page.width - 100, 60, 8).fill(DEEP_GREEN);
+                doc.fontSize(12).fillColor(CREAM)
                     .text("Want expert-rewritten titles, review analysis, and a 7-day action plan?", 70, ctaY + 12, { width: doc.page.width - 140, align: "center" });
                 doc.fontSize(10).fillColor(GOLD)
                     .text("Upgrade to Pro at www.letgrow.co.uk", 70, ctaY + 35, { width: doc.page.width - 140, align: "center" });
@@ -434,8 +441,8 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
                 ensureSpace(doc, 80);
                 doc.moveDown(1);
                 const ctaY = doc.y;
-                doc.roundedRect(50, ctaY, doc.page.width - 100, 60, 8).fill(DARK_GREEN);
-                doc.fontSize(12).fillColor(WHITE)
+                doc.roundedRect(50, ctaY, doc.page.width - 100, 60, 8).fill(DEEP_GREEN);
+                doc.fontSize(12).fillColor(CREAM)
                     .text("Want amenity suggestions, positioning strategy, and click-through optimisation?", 70, ctaY + 12, { width: doc.page.width - 140, align: "center" });
                 doc.fontSize(10).fillColor(GOLD)
                     .text("Upgrade to Premium at www.letgrow.co.uk", 70, ctaY + 35, { width: doc.page.width - 140, align: "center" });
