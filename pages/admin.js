@@ -71,7 +71,7 @@ function PipelineSteps({ status, pipeline }) {
     );
 }
 
-function SubmissionRow({ sub, onForce, onDetail, onRetry, forcing, retrying }) {
+function SubmissionRow({ sub, onForce, onDetail, onRetry, forcing, retrying, retried }) {
     const stage = stageBadge(sub.status, sub.pipeline, sub.tier);
     const tier = tierBadge(sub.tier);
     const isStuck = sub.status !== "complete" && sub.status !== "failed" && sub.duration_seconds > 900;
@@ -136,9 +136,15 @@ function SubmissionRow({ sub, onForce, onDetail, onRetry, forcing, retrying }) {
                                 </button>
                             )}
                             {(analysisStuck || analysisFailed) && (
-                                <button onClick={() => onRetry(sub.job_id)} disabled={retrying === sub.job_id} style={{ ...btnSmall, marginLeft: 4, background: "#FEE2E2", color: "#DC2626" }}>
-                                    {retrying === sub.job_id ? "..." : "Retry"}
-                                </button>
+                                retried?.[sub.job_id] ? (
+                                    <span style={{ marginLeft: 4, fontSize: 11, color: "#15803D", fontWeight: 500 }}>
+                                        Retried — re-analysing...
+                                    </span>
+                                ) : (
+                                    <button onClick={() => onRetry(sub.job_id)} disabled={retrying === sub.job_id} style={{ ...btnSmall, marginLeft: 4, background: "#FEE2E2", color: "#DC2626" }}>
+                                        {retrying === sub.job_id ? "Retrying..." : "Retry"}
+                                    </button>
+                                )
                             )}
                         </>
                     );
@@ -288,6 +294,7 @@ export default function AdminDashboard() {
     const [filter, setFilter] = useState({ status: "", tier: "", limit: 50 });
     const [forcing, setForcing] = useState(null);
     const [retrying, setRetrying] = useState(null);
+    const [retried, setRetried] = useState({});
     const [detail, setDetail] = useState(null);
     const [lastRefresh, setLastRefresh] = useState(null);
 
@@ -340,6 +347,7 @@ export default function AdminDashboard() {
         setRetrying(jobId);
         try {
             await apiCall("retry-analysis", { job_id: jobId });
+            setRetried((prev) => ({ ...prev, [jobId]: true }));
             await refresh();
         } catch (err) {
             alert(`Retry failed: ${err.message}`);
@@ -494,7 +502,7 @@ export default function AdminDashboard() {
                             </thead>
                             <tbody>
                                 {submissions.map((sub) => (
-                                    <SubmissionRow key={sub.id} sub={sub} onForce={handleForce} onRetry={handleRetry} onDetail={handleDetail} forcing={forcing} retrying={retrying} />
+                                    <SubmissionRow key={sub.id} sub={sub} onForce={handleForce} onRetry={handleRetry} onDetail={handleDetail} forcing={forcing} retrying={retrying} retried={retried} />
                                 ))}
                                 {submissions.length === 0 && !loading && (
                                     <tr><td colSpan={9} style={{ padding: 40, textAlign: "center", color: "#9CA3AF", fontSize: 14 }}>No submissions found</td></tr>
