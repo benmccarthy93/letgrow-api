@@ -5,11 +5,12 @@ const POLL_INTERVAL = 15000;
 
 const STAGE_ORDER = ["submitted", "fetch_start", "fetched", "scored", "analysis", "complete", "email_queued", "email_sent"];
 
-function stageBadge(status, pipeline) {
+function stageBadge(status, pipeline, tier) {
     if (status === "failed") return { label: "FAILED", color: "#DC2626", bg: "#FEE2E2" };
     if (status === "complete" && pipeline?.email?.status === "sent") return { label: "SENT", color: "#15803D", bg: "#DCFCE7" };
     if (status === "complete" && pipeline?.email?.status === "pending") return { label: "QUEUED", color: "#B45309", bg: "#FEF3C7" };
-    if (status === "complete") return { label: "COMPLETE", color: "#15803D", bg: "#DCFCE7" };
+    if (status === "complete") return { label: "READY TO SEND", color: "#15803D", bg: "#DCFCE7" };
+    if (status === "scored" && tier === "free") return { label: "READY TO SEND", color: "#15803D", bg: "#DCFCE7" };
     if (status === "scored") return { label: "ANALYSING", color: "#7C3AED", bg: "#EDE9FE" };
     if (status === "fetched") return { label: "SCORING", color: "#2563EB", bg: "#DBEAFE" };
     if (status === "processing") return { label: "FETCHING", color: "#D97706", bg: "#FEF3C7" };
@@ -70,7 +71,7 @@ function PipelineSteps({ status, pipeline }) {
 }
 
 function SubmissionRow({ sub, onForce, onDetail, forcing }) {
-    const stage = stageBadge(sub.status, sub.pipeline);
+    const stage = stageBadge(sub.status, sub.pipeline, sub.tier);
     const tier = tierBadge(sub.tier);
     const isStuck = sub.status !== "complete" && sub.status !== "failed" && sub.duration_seconds > 900;
 
@@ -110,11 +111,25 @@ function SubmissionRow({ sub, onForce, onDetail, forcing }) {
             <td style={{ ...td, fontSize: 11, color: "#9CA3AF" }}>{timeAgo(sub.created_at)}</td>
             <td style={{ ...td, whiteSpace: "nowrap" }}>
                 <button onClick={() => onDetail(sub.job_id)} style={btnSmall}>Detail</button>
-                {(sub.status === "complete" || sub.status === "scored") && (
-                    <button onClick={() => onForce(sub.job_id)} disabled={forcing === sub.job_id} style={{ ...btnSmall, marginLeft: 4, background: "#FEF3C7", color: "#92400E" }}>
-                        {forcing === sub.job_id ? "..." : "Send Now"}
-                    </button>
-                )}
+                {(() => {
+                    const reportReady = sub.status === "complete" || (sub.status === "scored" && sub.tier === "free");
+                    const reportInProgress = sub.status === "scored" && sub.tier !== "free";
+                    if (reportInProgress) {
+                        return (
+                            <span style={{ marginLeft: 4, fontSize: 11, color: "#7C3AED", fontWeight: 500 }}>
+                                Report generating...
+                            </span>
+                        );
+                    }
+                    if (reportReady) {
+                        return (
+                            <button onClick={() => onForce(sub.job_id)} disabled={forcing === sub.job_id} style={{ ...btnSmall, marginLeft: 4, background: "#FEF3C7", color: "#92400E" }}>
+                                {forcing === sub.job_id ? "..." : "Send Now"}
+                            </button>
+                        );
+                    }
+                    return null;
+                })()}
             </td>
         </tr>
     );

@@ -209,6 +209,11 @@ async function forceSend({ job_id }) {
         return { action: "none", reason: `Submission is in "${submission.status}" state — not ready for email yet` };
     }
 
+    // For pro/premium, require "complete" (analysis must finish before sending)
+    if (submission.status === "scored" && submission.tier !== "free") {
+        return { action: "none", reason: `Pro/premium report is still being generated (status: scored). Wait for analysis to complete.` };
+    }
+
     // Check scores exist
     const { data: scoreCheck } = await supabase
         .from("listing_scores")
