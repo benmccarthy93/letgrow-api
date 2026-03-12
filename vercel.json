@@ -15,6 +15,9 @@
     "pages/api/admin.js": {
       "maxDuration": 30
     },
+    "pages/api/admin-report.js": {
+      "maxDuration": 30
+    },
     "pages/api/process-listing.js": {
       "experimentalTriggers": [
         {

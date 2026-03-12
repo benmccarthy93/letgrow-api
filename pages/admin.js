@@ -117,52 +117,57 @@ function SubmissionRow({ sub, onForce, onDetail, onRetry, forcing, retrying, ret
                     const reportInProgress = sub.status === "scored" && sub.tier !== "free";
                     const analysisStuck = reportInProgress && sub.duration_seconds > 300;
                     const analysisFailed = sub.status === "failed" && sub.tier !== "free" && sub.pipeline?.analysis?.status !== "complete";
-                    return (
-                        <>
-                            {(reportInProgress || reportReady) && (
-                                <button
-                                    onClick={reportReady ? () => onForce(sub.job_id) : undefined}
-                                    disabled={!reportReady || forcing === sub.job_id}
-                                    style={{
-                                        ...btnSmall,
-                                        marginLeft: 4,
-                                        background: reportReady ? "#FEF3C7" : "#F3F4F6",
-                                        color: reportReady ? "#92400E" : "#9CA3AF",
-                                        cursor: reportReady ? "pointer" : "not-allowed",
-                                        opacity: reportReady ? 1 : 0.6,
-                                    }}
-                                >
-                                    {forcing === sub.job_id ? "..." : "Send Now"}
-                                </button>
-                            )}
-                            {(analysisStuck || analysisFailed) && (
-                                retried?.[sub.job_id] ? (
-                                    <span style={{ marginLeft: 4, fontSize: 11, color: "#15803D", fontWeight: 500 }}>
-                                        Retried — re-analysing...
-                                    </span>
-                                ) : (
-                                    <button onClick={() => onRetry(sub.job_id)} disabled={retrying === sub.job_id} style={{ ...btnSmall, marginLeft: 4, background: "#FEE2E2", color: "#DC2626" }}>
-                                        {retrying === sub.job_id ? "Retrying..." : "Retry"}
-                                    </button>
-                                )
-                            )}
-                        </>
-                    );
+                    const needsRetry = analysisStuck || analysisFailed;
+                    if (needsRetry) {
+                        return retried?.[sub.job_id] ? (
+                            <span style={{ marginLeft: 4, fontSize: 11, color: "#15803D", fontWeight: 500 }}>
+                                Retried — re-analysing...
+                            </span>
+                        ) : (
+                            <button onClick={() => onRetry(sub.job_id)} disabled={retrying === sub.job_id} style={{ ...btnSmall, marginLeft: 4, background: "#FEE2E2", color: "#DC2626" }}>
+                                {retrying === sub.job_id ? "Retrying..." : "Retry"}
+                            </button>
+                        );
+                    }
+                    if (reportInProgress) {
+                        return (
+                            <button disabled style={{ ...btnSmall, marginLeft: 4, background: "#F3F4F6", color: "#9CA3AF", cursor: "not-allowed", opacity: 0.6 }}>
+                                Send Now
+                            </button>
+                        );
+                    }
+                    if (reportReady) {
+                        return (
+                            <button onClick={() => onForce(sub.job_id)} disabled={forcing === sub.job_id} style={{ ...btnSmall, marginLeft: 4, background: "#FEF3C7", color: "#92400E" }}>
+                                {forcing === sub.job_id ? "..." : "Send Now"}
+                            </button>
+                        );
+                    }
+                    return null;
                 })()}
             </td>
         </tr>
     );
 }
 
-function DetailModal({ detail, onClose }) {
+function DetailModal({ detail, onClose, adminSecret }) {
     if (!detail) return null;
     const { submission, scores, analyses, emails, fetches } = detail;
+    const hasScores = !!scores?.[0];
+    const reportUrl = hasScores ? `/api/admin-report?job_id=${submission?.job_id}&secret=${encodeURIComponent(adminSecret)}` : null;
     return (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={onClose}>
             <div style={{ background: "white", borderRadius: 12, padding: 24, maxWidth: 700, width: "90%", maxHeight: "80vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }} onClick={(e) => e.stopPropagation()}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
                     <h3 style={{ margin: 0, fontSize: 16 }}>Submission Detail</h3>
-                    <button onClick={onClose} style={{ border: "none", background: "none", fontSize: 18, cursor: "pointer" }}>&times;</button>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        {reportUrl && (
+                            <a href={reportUrl} target="_blank" rel="noopener noreferrer" style={{ ...btnSmall, background: "#1B4332", color: "white", textDecoration: "none", fontSize: 12, padding: "6px 14px" }}>
+                                View Report PDF
+                            </a>
+                        )}
+                        <button onClick={onClose} style={{ border: "none", background: "none", fontSize: 18, cursor: "pointer" }}>&times;</button>
+                    </div>
                 </div>
 
                 <Section title="Submission">
@@ -512,7 +517,7 @@ export default function AdminDashboard() {
                     </div>
                 </div>
 
-                <DetailModal detail={detail} onClose={() => setDetail(null)} />
+                <DetailModal detail={detail} onClose={() => setDetail(null)} adminSecret={secret} />
             </div>
         </>
     );
