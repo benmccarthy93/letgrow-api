@@ -1059,6 +1059,7 @@ export default async function handler(req, res) {
                   .eq("id", submission.id);
 
               // Trigger pro analysis in background (non-blocking)
+              // analyse-pro.js handles its own submission status updates and email queueing
               const analyseUrl = `${APP_BASE_URL.replace(/\/+$/, "")}/api/analyse-pro`;
               fetch(analyseUrl, {
                   method: "POST",
@@ -1067,30 +1068,9 @@ export default async function handler(req, res) {
                       "x-internal-secret": INTERNAL_API_SECRET,
                   },
                   body: JSON.stringify({ submission_id: submission.id, job_id: submission.job_id }),
-              })
-                  .then(async (resp) => {
-                      if (resp.ok) {
-                          // Analysis complete — mark submission as complete
-                          await supabase
-                              .from("listing_submissions")
-                              .update({ status: "complete", status_message: "Analysis complete" })
-                              .eq("id", submission.id);
-                      } else {
-                          console.error("Pro analysis failed:", resp.status);
-                          // Still mark as complete so user gets their free score at minimum
-                          await supabase
-                              .from("listing_submissions")
-                              .update({ status: "complete", status_message: "Scoring complete (analysis failed)" })
-                              .eq("id", submission.id);
-                      }
-                  })
-                  .catch((err) => {
-                      console.error("Pro analysis trigger error:", err);
-                      supabase
-                          .from("listing_submissions")
-                          .update({ status: "complete", status_message: "Scoring complete (analysis error)" })
-                          .eq("id", submission.id);
-                  });
+              }).catch((err) => {
+                  console.error("Pro analysis trigger error:", err);
+              });
       } else {
               // Free tier — just mark as complete
               const { error: submissionUpdateError } = await supabase

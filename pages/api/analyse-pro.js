@@ -662,6 +662,16 @@ export default async function handler(req, res) {
             return res.status(500).json({ error: "Failed to save analysis results" });
         }
 
+        // Mark submission as complete (analyse-pro owns this for pro/premium tiers)
+        const { error: submissionUpdateErr } = await supabase
+            .from("listing_submissions")
+            .update({ status: "complete", status_message: "Analysis complete" })
+            .eq("id", submission.id);
+
+        if (submissionUpdateErr) {
+            console.error("Failed to update submission status:", submissionUpdateErr);
+        }
+
         // Queue email with tier-based delay (pro: 2-3.5hrs, premium: 2-8hrs)
         try {
             await queueEmail(supabase, {

@@ -6,6 +6,12 @@
     "pages/api/send-emails.js": {
       "maxDuration": 60
     },
+    "pages/api/score-next.js": {
+      "maxDuration": 60
+    },
+    "pages/api/analyse-pro.js": {
+      "maxDuration": 120
+    },
     "pages/api/process-listing.js": {
       "experimentalTriggers": [
         {
