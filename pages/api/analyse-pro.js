@@ -590,31 +590,35 @@ export default async function handler(req, res) {
             return res.status(500).json({ error: "Failed to create analysis record" });
         }
 
-        // 5. Run the 3 Claude calls
+        // 5. Run the 3 Claude calls (1 & 2 in parallel, then 3 which depends on both)
         const rawResponses = {};
         let rewriteResult = null;
         let reviewThemes = null;
         let assessment = null;
 
-        // Call 1: Title + Description Rewrite
-        try {
-            rewriteResult = await rewriteTitleAndDescription(listing);
+        // Calls 1 & 2 are independent — run in parallel
+        const [rewriteOutcome, reviewOutcome] = await Promise.allSettled([
+            rewriteTitleAndDescription(listing),
+            analyseReviews(reviews, listing),
+        ]);
+
+        if (rewriteOutcome.status === "fulfilled") {
+            rewriteResult = rewriteOutcome.value;
             rawResponses.rewrite = rewriteResult;
-        } catch (err) {
-            console.error("Claude rewrite call failed:", err);
-            rawResponses.rewrite_error = err.message;
+        } else {
+            console.error("Claude rewrite call failed:", rewriteOutcome.reason);
+            rawResponses.rewrite_error = rewriteOutcome.reason?.message || String(rewriteOutcome.reason);
         }
 
-        // Call 2: Review Theme Analysis
-        try {
-            reviewThemes = await analyseReviews(reviews, listing);
+        if (reviewOutcome.status === "fulfilled") {
+            reviewThemes = reviewOutcome.value;
             rawResponses.reviews = reviewThemes;
-        } catch (err) {
-            console.error("Claude review analysis failed:", err);
-            rawResponses.reviews_error = err.message;
+        } else {
+            console.error("Claude review analysis failed:", reviewOutcome.reason);
+            rawResponses.reviews_error = reviewOutcome.reason?.message || String(reviewOutcome.reason);
         }
 
-        // Call 3: Full Assessment + Action Plan
+        // Call 3: Full Assessment + Action Plan (depends on calls 1 & 2)
         try {
             assessment = await buildFullAssessment(listing, scores, rewriteResult, reviewThemes);
             rawResponses.assessment = assessment;
@@ -707,6 +711,43 @@ export default async function handler(req, res) {
         });
     } catch (e) {
         console.error("Unhandled error in analyse-pro:", e);
+
+        // Mark analysis as failed so it doesn't stay stuck at "processing"
+        try {
+            const body = req.body && typeof req.body === "object" ? req.body : {};
+            const jobId = getInputValue(body.job_id) || null;
+            const submissionId = getInputValue(body.submission_id) || null;
+
+            if (jobId || submissionId) {
+                // Find the processing analysis record and mark it failed
+                let analysisQuery = supabase.from("listing_analyses").select("id").eq("status", "processing");
+                if (submissionId) analysisQuery = analysisQuery.eq("submission_id", submissionId);
+                else if (jobId) analysisQuery = analysisQuery.eq("job_id", jobId);
+                const { data: stuckAnalysis } = await analysisQuery.order("created_at", { ascending: false }).limit(1).maybeSingle();
+
+                if (stuckAnalysis) {
+                    await supabase.from("listing_analyses").update({
+                        status: "failed",
+                        status_message: `Analysis failed: ${e.message || "Server error"}`,
+                    }).eq("id", stuckAnalysis.id);
+                }
+
+                // Also update submission status so it doesn't stay stuck
+                let subQuery = supabase.from("listing_submissions").select("id");
+                if (submissionId) subQuery = subQuery.eq("id", submissionId);
+                else subQuery = subQuery.eq("job_id", jobId);
+                const { data: sub } = await subQuery.maybeSingle();
+                if (sub) {
+                    await supabase.from("listing_submissions").update({
+                        status: "failed",
+                        status_message: `Analysis failed: ${e.message || "Server error"}`,
+                    }).eq("id", sub.id);
+                }
+            }
+        } catch (cleanupErr) {
+            console.error("Failed to mark analysis as failed:", cleanupErr);
+        }
+
         return res.status(500).json({ error: "Server error" });
     }
 }

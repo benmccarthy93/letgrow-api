@@ -242,6 +242,63 @@ async function forceSend({ job_id }) {
 }
 
 // ---------------------------------------------------------------------------
+// Action: retry-analysis
+// Re-trigger pro/premium analysis for a stuck or failed submission.
+// ---------------------------------------------------------------------------
+async function retryAnalysis({ job_id }) {
+    if (!job_id) throw new Error("job_id is required");
+
+    const { data: submission } = await supabase
+        .from("listing_submissions")
+        .select("id, job_id, email, full_name, tier, status")
+        .eq("job_id", job_id)
+        .maybeSingle();
+
+    if (!submission) {
+        return { action: "none", reason: "No submission found for this job_id" };
+    }
+
+    if (submission.tier === "free") {
+        return { action: "none", reason: "Free tier submissions do not have analysis" };
+    }
+
+    // Reset any stuck/failed analysis records
+    await supabase
+        .from("listing_analyses")
+        .update({ status: "cancelled", status_message: "Superseded by retry" })
+        .eq("submission_id", submission.id)
+        .in("status", ["processing", "failed"]);
+
+    // Reset submission status to scored so analysis can be re-triggered
+    await supabase
+        .from("listing_submissions")
+        .update({ status: "scored", status_message: "Retrying analysis" })
+        .eq("id", submission.id);
+
+    // Trigger the analysis
+    const APP_BASE_URL = process.env.APP_BASE_URL;
+    const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET;
+
+    if (!APP_BASE_URL || !INTERNAL_API_SECRET) {
+        return { action: "reset", reason: "Submission reset to scored but could not trigger analysis — missing APP_BASE_URL or INTERNAL_API_SECRET" };
+    }
+
+    const analyseUrl = `${APP_BASE_URL.replace(/\/+$/, "")}/api/analyse-pro`;
+    fetch(analyseUrl, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "x-internal-secret": INTERNAL_API_SECRET,
+        },
+        body: JSON.stringify({ submission_id: submission.id, job_id: submission.job_id }),
+    }).catch((err) => {
+        console.error("Retry analysis trigger error:", err);
+    });
+
+    return { action: "retried", reason: "Analysis re-triggered", job_id };
+}
+
+// ---------------------------------------------------------------------------
 // Action: submission-detail
 // Deep dive into a single submission with all related data.
 // ---------------------------------------------------------------------------
@@ -293,7 +350,7 @@ export default async function handler(req, res) {
     if (!action) {
         return res.status(400).json({
             error: "Missing action",
-            available_actions: ["pipeline-status", "stuck-submissions", "force-send", "submission-detail"],
+            available_actions: ["pipeline-status", "stuck-submissions", "force-send", "retry-analysis", "submission-detail"],
         });
     }
 
@@ -311,6 +368,10 @@ export default async function handler(req, res) {
                 const result = await forceSend(params);
                 return res.status(200).json({ success: true, ...result });
             }
+            case "retry-analysis": {
+                const result = await retryAnalysis(params);
+                return res.status(200).json({ success: true, ...result });
+            }
             case "submission-detail": {
                 const result = await submissionDetail(params);
                 return res.status(200).json({ success: true, ...result });
@@ -318,7 +379,7 @@ export default async function handler(req, res) {
             default:
                 return res.status(400).json({
                     error: `Unknown action: ${action}`,
-                    available_actions: ["pipeline-status", "stuck-submissions", "force-send", "submission-detail"],
+                    available_actions: ["pipeline-status", "stuck-submissions", "force-send", "retry-analysis", "submission-detail"],
                 });
         }
     } catch (err) {
