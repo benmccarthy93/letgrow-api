@@ -2,6 +2,8 @@
 // Generates a branded PDF report using PDFKit
 
 import PDFDocument from "pdfkit";
+import { readFileSync } from "fs";
+import { join } from "path";
 
 // Brand colours
 const DARK_GREEN = "#1B4332";
@@ -122,17 +124,13 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
             // Dark green header band
             doc.rect(0, 0, doc.page.width, 100).fill(DARK_GREEN);
 
-            // Logo
-            const logoBase64 = process.env.LETGROW_LOGO_BASE64;
-            if (logoBase64) {
-                try {
-                    const logoBuffer = Buffer.from(logoBase64, "base64");
-                    doc.image(logoBuffer, 50, 15, { width: 140 });
-                } catch (e) {
-                    console.error("Logo embed error:", e.message);
-                    doc.fontSize(22).fillColor(WHITE).text("LETGROW", 50, 30);
-                }
-            } else {
+            // Logo — read from file bundled in the repo
+            try {
+                const logoPath = join(process.cwd(), "pages", "api", "lib", "logo.png");
+                const logoBuffer = readFileSync(logoPath);
+                doc.image(logoBuffer, 50, 15, { width: 140 });
+            } catch (e) {
+                console.error("Logo embed error:", e.message);
                 doc.fontSize(22).fillColor(WHITE).text("LETGROW", 50, 30);
             }
 
