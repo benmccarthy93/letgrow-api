@@ -220,6 +220,8 @@ export default async function handler(req, res) {
       });
     }
 
+    console.log(JSON.stringify({ event: "pipeline", stage: "submitted", job_id: submission.job_id, submission_id: submission.id, tier, email: trimmedEmail }));
+
     triggerProcessingInBackground(submission.job_id);
 
     return res.status(200).json({

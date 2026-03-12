@@ -567,6 +567,8 @@ export default async function handler(req, res) {
             }
         }
 
+        console.log(JSON.stringify({ event: "pipeline", stage: "analysis_start", job_id: submission.job_id, submission_id: submission.id, tier: submission.tier }));
+
         // Create analysis record
         const { data: analysisRow, error: insertErr } = await supabase
             .from("listing_analyses")
@@ -662,6 +664,18 @@ export default async function handler(req, res) {
             return res.status(500).json({ error: "Failed to save analysis results" });
         }
 
+        // Mark submission as complete (analyse-pro owns this for pro/premium tiers)
+        const { error: submissionUpdateErr } = await supabase
+            .from("listing_submissions")
+            .update({ status: "complete", status_message: "Analysis complete" })
+            .eq("id", submission.id);
+
+        if (submissionUpdateErr) {
+            console.error("Failed to update submission status:", submissionUpdateErr);
+        }
+
+        console.log(JSON.stringify({ event: "pipeline", stage: "analysis_complete", job_id: submission.job_id, submission_id: submission.id, tier: submission.tier, analysis_id: analysisRow.id }));
+
         // Queue email with tier-based delay (pro: 2-3.5hrs, premium: 2-8hrs)
         try {
             await queueEmail(supabase, {
@@ -671,6 +685,7 @@ export default async function handler(req, res) {
                 recipientEmail: submission.email,
                 recipientName: submission.full_name,
             });
+            console.log(JSON.stringify({ event: "pipeline", stage: "email_queued", job_id: submission.job_id, submission_id: submission.id, tier: submission.tier || "pro" }));
         } catch (emailErr) {
             console.error("Failed to queue pro/premium email:", emailErr);
         }

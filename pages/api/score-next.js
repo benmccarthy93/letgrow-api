@@ -1047,6 +1047,8 @@ export default async function handler(req, res) {
               return res.status(500).json({ error: "Failed to store score" });
       }
 
+      console.log(JSON.stringify({ event: "pipeline", stage: "score_complete", job_id: submission.job_id, submission_id: submission.id, tier: submission.tier || "free", overall_score: overallScore, score_label: scoreLabel }));
+
       // Check if this is a pro/premium tier — if so, trigger analysis instead of completing
       const tier = submission.tier || "free";
       const needsAnalysis = tier === "pro" || tier === "premium";
@@ -1058,7 +1060,10 @@ export default async function handler(req, res) {
                   .update({ status: "scored", status_message: "Scoring complete — analysis in progress" })
                   .eq("id", submission.id);
 
+              console.log(JSON.stringify({ event: "pipeline", stage: "analysis_trigger", job_id: submission.job_id, submission_id: submission.id, tier }));
+
               // Trigger pro analysis in background (non-blocking)
+              // analyse-pro.js handles its own submission status updates and email queueing
               const analyseUrl = `${APP_BASE_URL.replace(/\/+$/, "")}/api/analyse-pro`;
               fetch(analyseUrl, {
                   method: "POST",
@@ -1067,30 +1072,9 @@ export default async function handler(req, res) {
                       "x-internal-secret": INTERNAL_API_SECRET,
                   },
                   body: JSON.stringify({ submission_id: submission.id, job_id: submission.job_id }),
-              })
-                  .then(async (resp) => {
-                      if (resp.ok) {
-                          // Analysis complete — mark submission as complete
-                          await supabase
-                              .from("listing_submissions")
-                              .update({ status: "complete", status_message: "Analysis complete" })
-                              .eq("id", submission.id);
-                      } else {
-                          console.error("Pro analysis failed:", resp.status);
-                          // Still mark as complete so user gets their free score at minimum
-                          await supabase
-                              .from("listing_submissions")
-                              .update({ status: "complete", status_message: "Scoring complete (analysis failed)" })
-                              .eq("id", submission.id);
-                      }
-                  })
-                  .catch((err) => {
-                      console.error("Pro analysis trigger error:", err);
-                      supabase
-                          .from("listing_submissions")
-                          .update({ status: "complete", status_message: "Scoring complete (analysis error)" })
-                          .eq("id", submission.id);
-                  });
+              }).catch((err) => {
+                  console.error("Pro analysis trigger error:", err);
+              });
       } else {
               // Free tier — just mark as complete
               const { error: submissionUpdateError } = await supabase
@@ -1112,6 +1096,7 @@ export default async function handler(req, res) {
                       recipientEmail: submission.email,
                       recipientName: submission.full_name,
                   });
+                  console.log(JSON.stringify({ event: "pipeline", stage: "email_queued", job_id: submission.job_id, submission_id: submission.id, tier: "free" }));
               } catch (emailErr) {
                   console.error("Failed to queue free tier email:", emailErr);
               }
