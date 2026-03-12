@@ -2,8 +2,6 @@
 // Generates a branded PDF report using PDFKit
 
 import PDFDocument from "pdfkit";
-import { readFileSync } from "fs";
-import { join } from "path";
 
 // Brand colours — derived from the LetGrow logo
 const DARK_GREEN = "#3B6B4A";       // Logo background green
@@ -126,18 +124,17 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
             // Dark green header band
             doc.rect(0, 0, doc.page.width, 100).fill(DEEP_GREEN);
 
-            // Logo — try logo.png then logo-square.png from the repo
-            const libDir = join(process.cwd(), "pages", "api", "lib");
-            let logoLoaded = false;
-            for (const file of ["logo.png", "logo-square.png"]) {
+            // Logo — fetch from Supabase storage
+            const logoUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL || "https://qjsrpsxjtmywcojnucjv.supabase.co"}/storage/v1/object/public/assets/logo.png`;
+            const logoBuffer = await fetchImageBuffer(logoUrl);
+            if (logoBuffer) {
                 try {
-                    const logoBuffer = readFileSync(join(libDir, file));
                     doc.image(logoBuffer, 50, 15, { height: 70 });
-                    logoLoaded = true;
-                    break;
-                } catch { /* try next */ }
-            }
-            if (!logoLoaded) {
+                } catch (e) {
+                    console.error("Logo embed error:", e.message);
+                    doc.fontSize(22).fillColor(CREAM).text("LETGROW", 50, 30);
+                }
+            } else {
                 doc.fontSize(22).fillColor(CREAM).text("LETGROW", 50, 30);
             }
 
