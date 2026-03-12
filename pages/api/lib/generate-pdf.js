@@ -84,15 +84,85 @@ function drawSectionHeader(doc, title) {
     doc.moveDown(0.3);
 }
 
+function extractItemText(item) {
+    if (typeof item === "string") return item;
+    if (!item || typeof item !== "object") return String(item ?? "");
+
+    // Review positive themes: theme + leverage_suggestion
+    if (item.theme && item.leverage_suggestion) {
+        let text = item.theme;
+        if (item.frequency) text += ` (${item.frequency})`;
+        if (item.example_quote) text += `\n  "${item.example_quote}"`;
+        if (item.leverage_suggestion) text += `\n  Suggestion: ${item.leverage_suggestion}`;
+        return text;
+    }
+    // Review negative themes: theme + fix_suggestions
+    if (item.theme && item.fix_suggestions) {
+        let text = `${item.theme}`;
+        if (item.severity) text += ` [${item.severity}]`;
+        if (item.frequency) text += ` — ${item.frequency}`;
+        if (item.example_quote) text += `\n  "${item.example_quote}"`;
+        const fixes = item.fix_suggestions;
+        if (fixes && typeof fixes === "object") {
+            if (fixes.fast) text += `\n  Quick fix: ${fixes.fast}`;
+            if (fixes.cheap) text += `\n  Budget fix: ${fixes.cheap}`;
+            if (fixes.premium) text += `\n  Premium fix: ${fixes.premium}`;
+        }
+        return text;
+    }
+    // Recurring issues
+    if (item.issue) {
+        let text = item.issue;
+        if (item.urgency) text += ` [${item.urgency} urgency]`;
+        if (item.times_mentioned) text += ` — mentioned ${item.times_mentioned} times`;
+        if (item.impact_on_bookings) text += `\n  Impact: ${item.impact_on_bookings}`;
+        return text;
+    }
+    // Strengths: area + detail + recommendation
+    if (item.area && item.detail) {
+        let text = `${item.area}: ${item.detail}`;
+        if (item.recommendation) text += `\n  Recommendation: ${item.recommendation}`;
+        return text;
+    }
+    // Revenue leaks
+    if (item.area && item.fix) {
+        let text = `${item.area}`;
+        if (item.estimated_impact) text += ` [${item.estimated_impact} impact]`;
+        if (item.detail) text += `: ${item.detail}`;
+        text += `\n  Fix: ${item.fix}`;
+        return text;
+    }
+    // Improvements
+    if (item.improvement) {
+        let text = item.improvement;
+        if (item.priority) text += ` [${item.priority}]`;
+        if (item.estimated_cost) text += ` — ${item.estimated_cost}`;
+        if (item.expected_impact) text += `\n  Impact: ${item.expected_impact}`;
+        if (item.instructions) text += `\n  How: ${item.instructions}`;
+        return text;
+    }
+    // Click-through suggestions
+    if (item.suggestion && item.rationale) {
+        let text = item.suggestion;
+        if (item.rationale) text += `\n  Why: ${item.rationale}`;
+        if (item.action) text += `\n  Action: ${item.action}`;
+        return text;
+    }
+    // Generic fallback — try common field names
+    return item.text || item.title || item.suggestion || item.action || item.fix || item.description || item.name || item.focus || JSON.stringify(item);
+}
+
 function drawBulletList(doc, items, options = {}) {
     const { numbered = false, indent = 60 } = options;
     if (!Array.isArray(items)) return;
     items.forEach((item, i) => {
-        ensureSpace(doc, 20);
+        const text = extractItemText(item);
+        // Estimate height needed based on text length
+        const estimatedLines = Math.ceil(text.length / 80) + (text.split("\n").length - 1);
+        ensureSpace(doc, Math.max(20, estimatedLines * 14));
         const prefix = numbered ? `${i + 1}. ` : "• ";
-        const text = typeof item === "string" ? item : (item?.text || item?.title || item?.suggestion || item?.action || item?.fix || JSON.stringify(item));
         doc.fontSize(10).fillColor(BODY_TEXT).text(`${prefix}${text}`, indent, doc.y, { width: doc.page.width - indent - 50 });
-        doc.moveDown(0.2);
+        doc.moveDown(0.3);
     });
 }
 
@@ -255,8 +325,6 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
 
                 // --- Rewritten Title ---
                 if (analysis.rewritten_title) {
-                    doc.addPage();
-                    addPageFooter(doc);
                     drawSectionHeader(doc, "Optimised Title");
 
                     const origTitleScore = safeJsonParse(analysis.rewritten_title_score);
@@ -267,16 +335,15 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
                     doc.fontSize(11).fillColor(DARK_GREEN).text(analysis.rewritten_title);
 
                     if (origTitleScore) {
-                        doc.moveDown(0.3);
+                        doc.moveDown(0.2);
                         doc.fontSize(9).fillColor(MEDIUM_GREY).text(
                             `Keywords: ${origTitleScore.keyword_count ?? "N/A"} | Characters: ${origTitleScore.character_count ?? "N/A"}`
                         );
                         if (origTitleScore.rationale) {
-                            doc.moveDown(0.2);
+                            doc.moveDown(0.1);
                             doc.fontSize(9).fillColor(BODY_TEXT).text(origTitleScore.rationale, { width: doc.page.width - 100 });
                         }
                     }
-                    doc.moveDown(0.5);
                 }
 
                 // --- Rewritten Description ---
@@ -288,16 +355,15 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
 
                     const descScore = safeJsonParse(analysis.rewritten_description_score);
                     if (descScore) {
-                        doc.moveDown(0.3);
+                        doc.moveDown(0.2);
                         doc.fontSize(9).fillColor(MEDIUM_GREY).text(
                             `Keywords: ${descScore.keyword_count ?? "N/A"} | Characters: ${descScore.character_count ?? "N/A"}`
                         );
                         if (descScore.rationale) {
-                            doc.moveDown(0.2);
+                            doc.moveDown(0.1);
                             doc.fontSize(9).fillColor(BODY_TEXT).text(descScore.rationale, { width: doc.page.width - 100 });
                         }
                     }
-                    doc.moveDown(0.5);
                 }
 
                 // --- Review Themes ---
@@ -308,27 +374,23 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
                     if (Array.isArray(reviewThemes.positive_themes) && reviewThemes.positive_themes.length > 0) {
                         doc.fontSize(10).fillColor("#2D6A4F").text("What guests love:");
                         drawBulletList(doc, reviewThemes.positive_themes);
-                        doc.moveDown(0.3);
                     }
                     if (Array.isArray(reviewThemes.negative_themes) && reviewThemes.negative_themes.length > 0) {
                         ensureSpace(doc, 30);
                         doc.fontSize(10).fillColor("#C0392B").text("Areas of concern:");
                         drawBulletList(doc, reviewThemes.negative_themes);
-                        doc.moveDown(0.3);
                     }
                     if (Array.isArray(reviewThemes.recurring_issues) && reviewThemes.recurring_issues.length > 0) {
                         ensureSpace(doc, 30);
                         doc.fontSize(10).fillColor("#E76F51").text("Recurring issues:");
                         drawBulletList(doc, reviewThemes.recurring_issues);
                     }
-                    doc.moveDown(0.5);
                 }
 
                 // --- Strengths ---
                 if (Array.isArray(analysis.strengths) && analysis.strengths.length > 0) {
                     drawSectionHeader(doc, "Your Strengths");
                     drawBulletList(doc, analysis.strengths);
-                    doc.moveDown(0.3);
                 }
 
                 // --- Revenue Leaks ---
@@ -336,21 +398,18 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
                     drawSectionHeader(doc, "Revenue Leaks");
                     doc.fontSize(9).fillColor(MEDIUM_GREY).text("These issues may be costing you bookings:");
                     drawBulletList(doc, analysis.revenue_leaks, { numbered: true });
-                    doc.moveDown(0.3);
                 }
 
                 // --- Instant Fixes ---
                 if (Array.isArray(analysis.instant_fixes) && analysis.instant_fixes.length > 0) {
                     drawSectionHeader(doc, "Instant Fixes (5–30 minutes)");
                     drawBulletList(doc, analysis.instant_fixes, { numbered: true });
-                    doc.moveDown(0.3);
                 }
 
                 // --- Overall Improvements ---
                 if (Array.isArray(analysis.overall_improvements) && analysis.overall_improvements.length > 0) {
                     drawSectionHeader(doc, "Recommended Improvements");
                     drawBulletList(doc, analysis.overall_improvements, { numbered: true });
-                    doc.moveDown(0.3);
                 }
 
                 // --- 7-Day Action Plan ---
@@ -360,18 +419,18 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
                     sevenDayPlan.forEach((day) => {
                         ensureSpace(doc, 30);
                         const dayLabel = day?.day || day?.label || "";
+                        const dayFocus = day?.focus || "";
                         const dayTasks = day?.tasks || day?.actions || (typeof day === "string" ? [day] : []);
                         if (dayLabel) {
-                            doc.fontSize(10).fillColor(DARK_GREEN).text(dayLabel);
+                            const focusText = dayFocus ? ` — ${dayFocus}` : "";
+                            doc.fontSize(10).fillColor(DARK_GREEN).text(`${dayLabel}${focusText}`);
                         }
                         if (Array.isArray(dayTasks)) {
                             drawBulletList(doc, dayTasks);
                         } else if (typeof dayTasks === "string") {
                             doc.fontSize(9).fillColor(BODY_TEXT).text(dayTasks, 60, doc.y, { width: doc.page.width - 110 });
                         }
-                        doc.moveDown(0.2);
                     });
-                    doc.moveDown(0.3);
                 }
 
                 // ===================== PREMIUM-ONLY CONTENT =====================
@@ -382,7 +441,6 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
                         drawSectionHeader(doc, "Click-Through Optimisation");
                         doc.fontSize(9).fillColor(MEDIUM_GREY).text("How to improve your search visibility and click rate:");
                         drawBulletList(doc, analysis.click_through_suggestions, { numbered: true });
-                        doc.moveDown(0.3);
                     }
 
                     // --- Amenity Suggestions ---
@@ -390,17 +448,20 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
                     if (Array.isArray(amenitySuggestions) && amenitySuggestions.length > 0) {
                         drawSectionHeader(doc, "Amenity Suggestions");
                         amenitySuggestions.forEach((item) => {
-                            ensureSpace(doc, 35);
                             const name = item?.amenity || item?.name || item?.title || (typeof item === "string" ? item : "");
                             const cost = item?.cost || item?.estimated_cost || "";
-                            const reason = item?.reason || item?.rationale || item?.roi_note || "";
-                            doc.fontSize(10).fillColor(DARK_GREEN).text(`${name}${cost ? ` — ${cost}` : ""}`, 60, doc.y, { width: doc.page.width - 110 });
-                            if (reason) {
-                                doc.fontSize(9).fillColor(BODY_TEXT).text(reason, 60, doc.y, { width: doc.page.width - 110 });
-                            }
-                            doc.moveDown(0.3);
+                            const reason = item?.roi_explanation || item?.reason || item?.rationale || item?.roi_note || "";
+                            const market = item?.market_opened || "";
+                            const priority = item?.priority || "";
+                            let text = `${name}${cost ? ` — ${cost}` : ""}`;
+                            if (priority) text += ` [${priority}]`;
+                            if (market) text += `\n  Opens market: ${market}`;
+                            if (reason) text += `\n  ${reason}`;
+                            const lines = Math.ceil(text.length / 80) + (text.split("\n").length - 1);
+                            ensureSpace(doc, Math.max(25, lines * 14));
+                            doc.fontSize(10).fillColor(DARK_GREEN).text(text, 60, doc.y, { width: doc.page.width - 110 });
+                            doc.moveDown(0.2);
                         });
-                        doc.moveDown(0.3);
                     }
 
                     // --- Positioning Summary ---
@@ -410,14 +471,12 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
                             ? analysis.positioning_summary
                             : JSON.stringify(analysis.positioning_summary, null, 2);
                         doc.fontSize(10).fillColor(BODY_TEXT).text(posSummary, { width: doc.page.width - 100 });
-                        doc.moveDown(0.3);
                     }
 
                     // --- Rewritten Your Property ---
                     if (analysis.rewritten_your_property) {
                         drawSectionHeader(doc, "Optimised 'Your Property' Section");
                         doc.fontSize(10).fillColor(BODY_TEXT).text(analysis.rewritten_your_property, { width: doc.page.width - 100 });
-                        doc.moveDown(0.3);
                     }
                 }
             }
@@ -444,8 +503,8 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
             }
 
             // ===================== FINAL FOOTER =====================
-            ensureSpace(doc, 50);
-            doc.moveDown(1.5);
+            ensureSpace(doc, 40);
+            doc.moveDown(0.5);
             doc.fontSize(8).fillColor(MEDIUM_GREY)
                 .text("This report was generated by LetGrow. The analysis is based on publicly available listing data and our proprietary scoring algorithm. For questions or support, visit www.letgrow.co.uk.", 50, doc.y, { width: doc.page.width - 100, align: "center" });
 
