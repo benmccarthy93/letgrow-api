@@ -117,28 +117,31 @@ function SubmissionRow({ sub, onForce, onDetail, onRetry, forcing, retrying }) {
                     const reportInProgress = sub.status === "scored" && sub.tier !== "free";
                     const analysisStuck = reportInProgress && sub.duration_seconds > 300;
                     const analysisFailed = sub.status === "failed" && sub.tier !== "free" && sub.pipeline?.analysis?.status !== "complete";
-                    if (analysisStuck || analysisFailed) {
-                        return (
-                            <button onClick={() => onRetry(sub.job_id)} disabled={retrying === sub.job_id} style={{ ...btnSmall, marginLeft: 4, background: "#FEE2E2", color: "#DC2626" }}>
-                                {retrying === sub.job_id ? "..." : "Retry Analysis"}
-                            </button>
-                        );
-                    }
-                    if (reportInProgress) {
-                        return (
-                            <span style={{ marginLeft: 4, fontSize: 11, color: "#7C3AED", fontWeight: 500 }}>
-                                Report generating...
-                            </span>
-                        );
-                    }
-                    if (reportReady) {
-                        return (
-                            <button onClick={() => onForce(sub.job_id)} disabled={forcing === sub.job_id} style={{ ...btnSmall, marginLeft: 4, background: "#FEF3C7", color: "#92400E" }}>
-                                {forcing === sub.job_id ? "..." : "Send Now"}
-                            </button>
-                        );
-                    }
-                    return null;
+                    return (
+                        <>
+                            {(reportInProgress || reportReady) && (
+                                <button
+                                    onClick={reportReady ? () => onForce(sub.job_id) : undefined}
+                                    disabled={!reportReady || forcing === sub.job_id}
+                                    style={{
+                                        ...btnSmall,
+                                        marginLeft: 4,
+                                        background: reportReady ? "#FEF3C7" : "#F3F4F6",
+                                        color: reportReady ? "#92400E" : "#9CA3AF",
+                                        cursor: reportReady ? "pointer" : "not-allowed",
+                                        opacity: reportReady ? 1 : 0.6,
+                                    }}
+                                >
+                                    {forcing === sub.job_id ? "..." : "Send Now"}
+                                </button>
+                            )}
+                            {(analysisStuck || analysisFailed) && (
+                                <button onClick={() => onRetry(sub.job_id)} disabled={retrying === sub.job_id} style={{ ...btnSmall, marginLeft: 4, background: "#FEE2E2", color: "#DC2626" }}>
+                                    {retrying === sub.job_id ? "..." : "Retry"}
+                                </button>
+                            )}
+                        </>
+                    );
                 })()}
             </td>
         </tr>
@@ -170,36 +173,75 @@ function DetailModal({ detail, onClose }) {
                 {scores?.[0] && (
                     <Section title="Score">
                         <KV label="Overall" value={`${scores[0].overall_score}/100 (${scores[0].score_label})`} />
-                        <KV label="Title" value={scores[0].title_score} />
-                        <KV label="Description" value={scores[0].description_score} />
-                        <KV label="Photos" value={scores[0].photo_score} />
-                        <KV label="Amenities" value={scores[0].amenity_score} />
-                        <KV label="Trust" value={scores[0].trust_score} />
-                        <KV label="Market" value={scores[0].market_score} />
+                        <KV label="Title" value={`${scores[0].title_score}/10`} />
+                        <KV label="Description" value={`${scores[0].description_score}/10`} />
+                        <KV label="Photos" value={`${scores[0].photo_score}/10`} />
+                        <KV label="Amenities" value={`${scores[0].amenity_score}/10`} />
+                        <KV label="Trust" value={`${scores[0].trust_score}/30`} />
+                        <KV label="Market" value={`${scores[0].market_score}/30`} />
                         <KV label="Scored at" value={formatDate(scores[0].scored_at)} />
                     </Section>
                 )}
 
-                {analyses?.[0] && (
-                    <Section title="Analysis">
-                        <KV label="Status" value={analyses[0].status} />
-                        <KV label="Analysed at" value={formatDate(analyses[0].analysed_at)} />
+                {(submission?.tier === "pro" || submission?.tier === "premium") && (
+                    <Section title={`Analysis (${submission?.tier})`}>
+                        {analyses?.[0] ? (
+                            <>
+                                <KV label="Status" value={analyses[0].status} />
+                                <KV label="Analysed at" value={formatDate(analyses[0].analysed_at)} />
+                                {analyses[0].status === "processing" && (
+                                    <div style={{ marginTop: 8, padding: 8, background: "#FEF3C7", borderRadius: 6, fontSize: 12, color: "#92400E" }}>
+                                        Analysis is still processing. If stuck for more than 5 minutes, use Retry on the main table.
+                                    </div>
+                                )}
+                                {analyses[0].status === "failed" && (
+                                    <div style={{ marginTop: 8, padding: 8, background: "#FEE2E2", borderRadius: 6, fontSize: 12, color: "#DC2626" }}>
+                                        Analysis failed: {analyses[0].status_message || "Unknown error"}
+                                    </div>
+                                )}
+                                {analyses[0].status === "complete" && (
+                                    <div style={{ marginTop: 8, fontSize: 12 }}>
+                                        <KV label="Rewrite" value={analyses[0].rewritten_title ? "Done" : "Missing"} />
+                                        <KV label="Reviews" value={analyses[0].review_themes ? "Done" : "Missing"} />
+                                        <KV label="Assessment" value={analyses[0].strengths ? "Done" : "Missing"} />
+                                    </div>
+                                )}
+                            </>
+                        ) : (
+                            <div style={{ padding: 8, background: "#FEF3C7", borderRadius: 6, fontSize: 12, color: "#92400E" }}>
+                                No analysis record found. Analysis may not have been triggered.
+                            </div>
+                        )}
                     </Section>
                 )}
 
-                {emails?.length > 0 && (
-                    <Section title="Emails">
-                        {emails.map((e, i) => (
+                <Section title="Email Delivery">
+                    {emails?.length > 0 ? emails.map((e, i) => {
+                        const statusColor = e.status === "sent" ? "#15803D" : e.status === "failed" ? "#DC2626" : e.status === "processing" ? "#2563EB" : "#92400E";
+                        const statusBg = e.status === "sent" ? "#DCFCE7" : e.status === "failed" ? "#FEE2E2" : e.status === "processing" ? "#DBEAFE" : "#FEF3C7";
+                        return (
                             <div key={i} style={{ marginBottom: 8, padding: 8, background: "#F9FAFB", borderRadius: 6, fontSize: 12 }}>
-                                <KV label="Status" value={e.status} />
-                                <KV label="Send at" value={formatDate(e.send_at)} />
-                                <KV label="Sent at" value={e.sent_at ? formatDate(e.sent_at) : "-"} />
-                                <KV label="Attempts" value={e.attempts} />
-                                {e.last_error && <KV label="Error" value={e.last_error} />}
+                                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                                    <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 9999, color: statusColor, background: statusBg }}>
+                                        {e.status?.toUpperCase()}
+                                    </span>
+                                    {e.status === "pending" && e.send_at && <span style={{ fontSize: 11, color: "#6B7280" }}>Scheduled: {formatDate(e.send_at)}</span>}
+                                    {e.status === "sent" && e.sent_at && <span style={{ fontSize: 11, color: "#15803D" }}>Delivered: {formatDate(e.sent_at)}</span>}
+                                </div>
+                                <KV label="Attempts" value={`${e.attempts || 0}/3`} />
+                                {e.last_error && (
+                                    <div style={{ marginTop: 4, padding: 6, background: "#FEE2E2", borderRadius: 4, fontSize: 11, color: "#DC2626", wordBreak: "break-word" }}>
+                                        {e.last_error}
+                                    </div>
+                                )}
                             </div>
-                        ))}
-                    </Section>
-                )}
+                        );
+                    }) : (
+                        <div style={{ padding: 8, background: "#F9FAFB", borderRadius: 6, fontSize: 12, color: "#6B7280" }}>
+                            No email queued yet
+                        </div>
+                    )}
+                </Section>
 
                 {fetches?.length > 0 && (
                     <Section title="Fetches">
