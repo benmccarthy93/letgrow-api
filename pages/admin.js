@@ -71,7 +71,7 @@ function PipelineSteps({ status, pipeline }) {
     );
 }
 
-function SubmissionRow({ sub, onForce, onDetail, onRetry, forcing, retrying, retried }) {
+function SubmissionRow({ sub, onForce, onDetail, onRetry, onRetryProcessing, forcing, retrying, retried }) {
     const stage = stageBadge(sub.status, sub.pipeline, sub.tier);
     const tier = tierBadge(sub.tier);
     const isStuck = sub.status !== "complete" && sub.status !== "failed" && sub.duration_seconds > 900;
@@ -113,6 +113,20 @@ function SubmissionRow({ sub, onForce, onDetail, onRetry, forcing, retrying, ret
             <td style={{ ...td, whiteSpace: "nowrap" }}>
                 <button onClick={() => onDetail(sub.job_id)} style={btnSmall}>Detail</button>
                 {(() => {
+                    // Stuck at pending/processing — needs processing retry
+                    const pendingStuck = (sub.status === "pending" || sub.status === "processing") && sub.duration_seconds > 120;
+                    if (pendingStuck) {
+                        return retried?.[sub.job_id] ? (
+                            <span style={{ marginLeft: 4, fontSize: 11, color: "#15803D", fontWeight: 500 }}>
+                                Retried — processing...
+                            </span>
+                        ) : (
+                            <button onClick={() => onRetryProcessing(sub.job_id)} disabled={retrying === sub.job_id} style={{ ...btnSmall, marginLeft: 4, background: "#FEE2E2", color: "#DC2626" }}>
+                                {retrying === sub.job_id ? "Retrying..." : "Retry"}
+                            </button>
+                        );
+                    }
+
                     const reportReady = sub.status === "complete" || (sub.status === "scored" && sub.tier === "free");
                     const reportInProgress = sub.status === "scored" && sub.tier !== "free";
                     const analysisStuck = reportInProgress && sub.duration_seconds > 300;
@@ -361,6 +375,19 @@ export default function AdminDashboard() {
         }
     };
 
+    const handleRetryProcessing = async (jobId) => {
+        setRetrying(jobId);
+        try {
+            await apiCall("retry-processing", { job_id: jobId });
+            setRetried((prev) => ({ ...prev, [jobId]: true }));
+            await refresh();
+        } catch (err) {
+            alert(`Retry failed: ${err.message}`);
+        } finally {
+            setRetrying(null);
+        }
+    };
+
     const handleForce = async (jobId) => {
         setForcing(jobId);
         try {
@@ -507,7 +534,7 @@ export default function AdminDashboard() {
                             </thead>
                             <tbody>
                                 {submissions.map((sub) => (
-                                    <SubmissionRow key={sub.id} sub={sub} onForce={handleForce} onRetry={handleRetry} onDetail={handleDetail} forcing={forcing} retrying={retrying} retried={retried} />
+                                    <SubmissionRow key={sub.id} sub={sub} onForce={handleForce} onRetry={handleRetry} onRetryProcessing={handleRetryProcessing} onDetail={handleDetail} forcing={forcing} retrying={retrying} retried={retried} />
                                 ))}
                                 {submissions.length === 0 && !loading && (
                                     <tr><td colSpan={9} style={{ padding: 40, textAlign: "center", color: "#9CA3AF", fontSize: 14 }}>No submissions found</td></tr>
