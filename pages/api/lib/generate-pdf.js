@@ -124,18 +124,21 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
             // Dark green header band
             doc.rect(0, 0, doc.page.width, 100).fill(DEEP_GREEN);
 
-            // Logo — fetch from Supabase storage
-            const logoUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL || "https://qjsrpsxjtmywcojnucjv.supabase.co"}/storage/v1/object/public/assets/logo.png`;
-            const logoBuffer = await fetchImageBuffer(logoUrl);
+            // Logo — fetch from Supabase storage (try full logo, then square)
+            const storageBase = `${process.env.NEXT_PUBLIC_SUPABASE_URL || "https://qjsrpsxjtmywcojnucjv.supabase.co"}/storage/v1/object/public/assets`;
+            let logoBuffer = await fetchImageBuffer(`${storageBase}/logo.png`);
+            if (!logoBuffer) logoBuffer = await fetchImageBuffer(`${storageBase}/logo-square.png`);
             if (logoBuffer) {
                 try {
                     doc.image(logoBuffer, 50, 15, { height: 70 });
                 } catch (e) {
                     console.error("Logo embed error:", e.message);
-                    doc.fontSize(22).fillColor(CREAM).text("LETGROW", 50, 30);
+                    doc.font("Helvetica-Bold").fontSize(22).fillColor(CREAM).text("LETGROW", 50, 30);
+                    doc.font("Helvetica");
                 }
             } else {
-                doc.fontSize(22).fillColor(CREAM).text("LETGROW", 50, 30);
+                doc.font("Helvetica-Bold").fontSize(22).fillColor(CREAM).text("LETGROW", 50, 30);
+                doc.font("Helvetica");
             }
 
             // Header text
