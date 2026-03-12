@@ -966,6 +966,8 @@ export default async function handler(req, res) {
         "Fetching listing data"
       );
 
+      console.log(JSON.stringify({ event: "pipeline", stage: "fetch_start", job_id: submission.job_id, submission_id: submission.id, tier: submission.tier, url: submission.normalised_url }));
+
       const hasDataResult = await fetchHasDataProperty(submission.normalised_url);
 
       if (!hasDataResult.ok) {
@@ -976,6 +978,8 @@ export default async function handler(req, res) {
           requestUrl: hasDataResult.requestUrl,
           rawResponse: hasDataResult.raw,
         });
+
+        console.log(JSON.stringify({ event: "pipeline", stage: "fetch_failed", job_id: submission.job_id, submission_id: submission.id, provider: "hasdata", provider_status: hasDataResult.status }));
 
         await markSubmission(
           submission.id,
@@ -1112,6 +1116,8 @@ export default async function handler(req, res) {
         console.error("AirROI fetch error (non-blocking):", airRoiError);
       }
     }
+
+    console.log(JSON.stringify({ event: "pipeline", stage: "fetch_complete", job_id: submission.job_id, submission_id: submission.id, tier: submission.tier }));
 
     await markSubmission(
       submission.id,

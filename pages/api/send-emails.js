@@ -74,8 +74,10 @@ export default async function handler(req, res) {
                     })
                     .eq("id", row.id);
 
+                console.log(JSON.stringify({ event: "pipeline", stage: "email_sent", job_id: row.job_id, submission_id: row.submission_id, tier: row.tier, email: row.recipient_email }));
                 results.push({ id: row.id, status: "sent", email: row.recipient_email });
             } catch (err) {
+                console.log(JSON.stringify({ event: "pipeline", stage: "email_failed", job_id: row.job_id, submission_id: row.submission_id, tier: row.tier, error: err.message }));
                 console.error(`Failed to send email ${row.id}:`, err.message);
 
                 const newAttempts = (row.attempts || 0) + 1;

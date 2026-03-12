@@ -12,6 +12,9 @@
     "pages/api/analyse-pro.js": {
       "maxDuration": 120
     },
+    "pages/api/admin.js": {
+      "maxDuration": 30
+    },
     "pages/api/process-listing.js": {
       "experimentalTriggers": [
         {

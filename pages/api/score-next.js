@@ -1047,6 +1047,8 @@ export default async function handler(req, res) {
               return res.status(500).json({ error: "Failed to store score" });
       }
 
+      console.log(JSON.stringify({ event: "pipeline", stage: "score_complete", job_id: submission.job_id, submission_id: submission.id, tier: submission.tier || "free", overall_score: overallScore, score_label: scoreLabel }));
+
       // Check if this is a pro/premium tier — if so, trigger analysis instead of completing
       const tier = submission.tier || "free";
       const needsAnalysis = tier === "pro" || tier === "premium";
@@ -1057,6 +1059,8 @@ export default async function handler(req, res) {
                   .from("listing_submissions")
                   .update({ status: "scored", status_message: "Scoring complete — analysis in progress" })
                   .eq("id", submission.id);
+
+              console.log(JSON.stringify({ event: "pipeline", stage: "analysis_trigger", job_id: submission.job_id, submission_id: submission.id, tier }));
 
               // Trigger pro analysis in background (non-blocking)
               // analyse-pro.js handles its own submission status updates and email queueing
@@ -1092,6 +1096,7 @@ export default async function handler(req, res) {
                       recipientEmail: submission.email,
                       recipientName: submission.full_name,
                   });
+                  console.log(JSON.stringify({ event: "pipeline", stage: "email_queued", job_id: submission.job_id, submission_id: submission.id, tier: "free" }));
               } catch (emailErr) {
                   console.error("Failed to queue free tier email:", emailErr);
               }
