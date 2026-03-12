@@ -299,6 +299,62 @@ async function retryAnalysis({ job_id }) {
 }
 
 // ---------------------------------------------------------------------------
+// Action: retry-processing
+// Re-trigger process-next for a submission stuck in "pending" or "processing".
+// ---------------------------------------------------------------------------
+async function retryProcessing({ job_id }) {
+    if (!job_id) throw new Error("job_id is required");
+
+    const { data: submission } = await supabase
+        .from("listing_submissions")
+        .select("id, job_id, status, tier")
+        .eq("job_id", job_id)
+        .maybeSingle();
+
+    if (!submission) {
+        return { action: "none", reason: "No submission found for this job_id" };
+    }
+
+    if (submission.status !== "pending" && submission.status !== "processing") {
+        return { action: "none", reason: `Submission is in "${submission.status}" state — only pending/processing can be retried` };
+    }
+
+    // Reset to pending so process-next picks it up cleanly
+    await supabase
+        .from("listing_submissions")
+        .update({ status: "pending", status_message: "Retrying processing" })
+        .eq("id", submission.id);
+
+    const APP_BASE_URL = process.env.APP_BASE_URL;
+    const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET;
+
+    if (!APP_BASE_URL || !INTERNAL_API_SECRET) {
+        return { action: "reset", reason: "Submission reset to pending but could not trigger processing — missing config" };
+    }
+
+    const processUrl = `${APP_BASE_URL.replace(/\/+$/, "")}/api/process-next`;
+    try {
+        const response = await fetch(processUrl, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "x-internal-secret": INTERNAL_API_SECRET,
+            },
+            body: JSON.stringify({ job_id: submission.job_id }),
+        });
+
+        if (!response.ok) {
+            return { action: "reset", reason: `Submission reset but process-next returned ${response.status}`, job_id };
+        }
+
+        return { action: "retried", reason: "Processing re-triggered", job_id };
+    } catch (err) {
+        console.error("Retry processing trigger error:", err);
+        return { action: "reset", reason: "Submission reset but trigger failed: " + err.message, job_id };
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Action: submission-detail
 // Deep dive into a single submission with all related data.
 // ---------------------------------------------------------------------------
@@ -350,7 +406,7 @@ export default async function handler(req, res) {
     if (!action) {
         return res.status(400).json({
             error: "Missing action",
-            available_actions: ["pipeline-status", "stuck-submissions", "force-send", "retry-analysis", "submission-detail"],
+            available_actions: ["pipeline-status", "stuck-submissions", "force-send", "retry-analysis", "retry-processing", "submission-detail"],
         });
     }
 
@@ -372,6 +428,10 @@ export default async function handler(req, res) {
                 const result = await retryAnalysis(params);
                 return res.status(200).json({ success: true, ...result });
             }
+            case "retry-processing": {
+                const result = await retryProcessing(params);
+                return res.status(200).json({ success: true, ...result });
+            }
             case "submission-detail": {
                 const result = await submissionDetail(params);
                 return res.status(200).json({ success: true, ...result });
@@ -379,7 +439,7 @@ export default async function handler(req, res) {
             default:
                 return res.status(400).json({
                     error: `Unknown action: ${action}`,
-                    available_actions: ["pipeline-status", "stuck-submissions", "force-send", "retry-analysis", "submission-detail"],
+                    available_actions: ["pipeline-status", "stuck-submissions", "force-send", "retry-analysis", "retry-processing", "submission-detail"],
                 });
         }
     } catch (err) {

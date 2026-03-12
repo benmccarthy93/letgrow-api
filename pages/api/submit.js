@@ -86,26 +86,36 @@ function buildProcessNextUrl() {
   return `${APP_BASE_URL.replace(/\/+$/, "")}/api/process-next`;
 }
 
-async function triggerProcessingInBackground(jobId) {
+async function triggerProcessing(jobId) {
   const processNextUrl = buildProcessNextUrl();
 
   if (!processNextUrl || !INTERNAL_API_SECRET) {
-    console.error("Background processing could not start: missing config");
-    return;
+    console.error("Processing trigger skipped: missing config");
+    return false;
   }
 
-  fetch(processNextUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-internal-secret": INTERNAL_API_SECRET,
-    },
-    body: JSON.stringify({
-      job_id: jobId,
-    }),
-  }).catch((error) => {
-    console.error("Background processing trigger failed:", error);
-  });
+  try {
+    const response = await fetch(processNextUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-internal-secret": INTERNAL_API_SECRET,
+      },
+      body: JSON.stringify({
+        job_id: jobId,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error("Processing trigger returned non-OK:", response.status);
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.error("Processing trigger failed:", error);
+    return false;
+  }
 }
 
 export default async function handler(req, res) {
@@ -222,13 +232,13 @@ export default async function handler(req, res) {
 
     console.log(JSON.stringify({ event: "pipeline", stage: "submitted", job_id: submission.job_id, submission_id: submission.id, tier, email: trimmedEmail }));
 
-    triggerProcessingInBackground(submission.job_id);
+    const processingStarted = await triggerProcessing(submission.job_id);
 
     return res.status(200).json({
       success: true,
       job_id: submission.job_id,
       submission_id: submission.id,
-      processing_started: true,
+      processing_started: processingStarted,
     });
   } catch (e) {
     console.error("Unhandled error:", e);
