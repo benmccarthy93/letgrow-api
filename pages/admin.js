@@ -99,11 +99,16 @@ function SubmissionRow({ sub, onForce, onDetail, onRetry, onRetryProcessing, for
                 {sub.pipeline?.score ? <strong>{sub.pipeline.score.overall_score}</strong> : <span style={{ color: "#D1D5DB" }}>-</span>}
             </td>
             <td style={{ ...td, textAlign: "center" }}>
-                {sub.pipeline?.email?.status === "pending" && sub.pipeline.email.send_at && (
-                    <div style={{ fontSize: 11, color: "#92400E" }}>Sends {formatDate(sub.pipeline.email.send_at)}</div>
-                )}
+                {sub.pipeline?.email?.status === "pending" && sub.pipeline.email.send_at && (() => {
+                    const sendAt = new Date(sub.pipeline.email.send_at);
+                    const now = new Date();
+                    if (sendAt <= now) {
+                        return <div style={{ fontSize: 11, color: "#2563EB", fontWeight: 500 }}>Sending soon...</div>;
+                    }
+                    return <div style={{ fontSize: 11, color: "#92400E" }}>Sends {formatDate(sub.pipeline.email.send_at)}</div>;
+                })()}
                 {sub.pipeline?.email?.status === "sent" && (
-                    <div style={{ fontSize: 11, color: "#15803D" }}>Sent {timeAgo(sub.pipeline.email.sent_at)}</div>
+                    <div style={{ fontSize: 11, color: "#15803D", fontWeight: 500 }}>Sent {formatDate(sub.pipeline.email.sent_at)}</div>
                 )}
                 {sub.pipeline?.email?.last_error && (
                     <div style={{ fontSize: 10, color: "#DC2626", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={sub.pipeline.email.last_error}>{sub.pipeline.email.last_error}</div>
