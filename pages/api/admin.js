@@ -52,7 +52,7 @@ async function pipelineStatus({ status, tier, limit = 50, job_id, order = "desc"
             .order("created_at", { ascending: false }),
         supabase
             .from("listing_scores")
-            .select("submission_id, overall_score, score_label, scored_at")
+            .select("submission_id, overall_score, score_label, summary, scored_at")
             .in("submission_id", ids)
             .order("scored_at", { ascending: false }),
         supabase
@@ -107,7 +107,14 @@ async function pipelineStatus({ status, tier, limit = 50, job_id, order = "desc"
                     ? { status: fetch.fetch_status, provider: fetch.provider, fetched_at: fetch.created_at }
                     : null,
                 score: score
-                    ? { overall_score: score.overall_score, label: score.score_label, scored_at: score.scored_at }
+                    ? (() => {
+                        let rateDataMissing = false;
+                        try {
+                            const summary = typeof score.summary === "string" ? JSON.parse(score.summary) : score.summary;
+                            rateDataMissing = !!summary?.signals?.competitive?.noData;
+                        } catch { /* ignore parse errors */ }
+                        return { overall_score: score.overall_score, label: score.score_label, scored_at: score.scored_at, rate_data_missing: rateDataMissing };
+                    })()
                     : null,
                 analysis: analysis
                     ? { status: analysis.status, analysed_at: analysis.analysed_at }

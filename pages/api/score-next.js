@@ -520,8 +520,8 @@ function scoreCompetitivePositioning(ratesData) {
 
     // --- Flat pricing detection (same price across entire calendar) ---
     const uniqueRates = new Set(pricedDays.map((r) => r.rate));
-    const isFlatPricing = pricedDays.length >= 10 && uniqueRates.size <= 2;
-    signals.flatPricingDetection = isFlatPricing ? -20 : 0;
+    const isFlatPricing = pricedDays.length >= 30 && uniqueRates.size <= 2;
+    signals.flatPricingDetection = isFlatPricing ? -15 : 0;
     total += signals.flatPricingDetection;
 
     // --- Availability windows ---
@@ -533,26 +533,26 @@ function scoreCompetitivePositioning(ratesData) {
 
     const pct1to5 = availabilityPct(avail1to5);
     if (pct1to5 < 0.25) signals.avail1to5 = 0;
-    else if (pct1to5 <= 0.50) signals.avail1to5 = -15;
-    else signals.avail1to5 = -25;
+    else if (pct1to5 <= 0.50) signals.avail1to5 = -10;
+    else signals.avail1to5 = -20;
     total += signals.avail1to5;
 
     const pct5to10 = availabilityPct(avail5to10);
     if (pct5to10 < 0.25) signals.avail5to10 = 10;
     else if (pct5to10 <= 0.50) signals.avail5to10 = -5;
-    else signals.avail5to10 = -20;
+    else signals.avail5to10 = -15;
     total += signals.avail5to10;
 
     const pct10to20 = availabilityPct(avail10to20);
     if (pct10to20 < 0.25) signals.avail10to20 = 20;
     else if (pct10to20 <= 0.50) signals.avail10to20 = 5;
-    else signals.avail10to20 = -15;
+    else signals.avail10to20 = -10;
     total += signals.avail10to20;
 
     const pct20to30 = availabilityPct(avail20to30);
     if (pct20to30 < 0.25) signals.avail20to30 = 10;
     else if (pct20to30 <= 0.50) signals.avail20to30 = 0;
-    else signals.avail20to30 = -10;
+    else signals.avail20to30 = -7;
     total += signals.avail20to30;
 
     const pct30to60 = availabilityPct(avail30to60);
@@ -573,7 +573,7 @@ function scoreCompetitivePositioning(ratesData) {
         }
     }
     const hasLongGaps = maxConsecutiveAvailable >= 7;
-    signals.longGaps = hasLongGaps ? -20 : 0;
+    signals.longGaps = hasLongGaps ? -15 : 0;
     total += signals.longGaps;
 
     // --- Price volatility (std deviation >= 35% of mean) ---
@@ -597,7 +597,7 @@ function scoreCompetitivePositioning(ratesData) {
     const weekendAvailPct = weekendDaysNext30.length > 0
         ? weekendDaysNext30.filter((r) => r.available).length / weekendDaysNext30.length
         : 0;
-    signals.weekendAvailability = weekendAvailPct > 0.50 ? -10 : 0;
+    signals.weekendAvailability = weekendAvailPct > 0.50 ? -5 : 0;
     total += signals.weekendAvailability;
 
     // --- Minimum stay ---
