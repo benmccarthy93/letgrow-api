@@ -155,7 +155,7 @@ function extractItemText(item) {
 }
 
 function drawBulletList(doc, items, options = {}) {
-    const { numbered = false, indent = 60 } = options;
+    const { numbered = false, indent = 60, spaced = false } = options;
     if (!Array.isArray(items)) return;
     items.forEach((item, i) => {
         const text = extractItemText(item);
@@ -166,7 +166,12 @@ function drawBulletList(doc, items, options = {}) {
         ensureSpace(doc, Math.max(14, estimatedLines * 13));
         const prefix = numbered ? `${i + 1}. ` : "• ";
         doc.fontSize(10).fillColor(BODY_TEXT).text(`${prefix}${text}`, indent, doc.y, { width: availWidth });
-        doc.moveDown(0.15);
+        if (spaced) {
+            // Add visible gap between items for readability
+            doc.moveDown(0.6);
+        } else {
+            doc.moveDown(0.15);
+        }
     });
 }
 
@@ -380,31 +385,31 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
 
                     if (Array.isArray(reviewThemes.positive_themes) && reviewThemes.positive_themes.length > 0) {
                         doc.fontSize(10).fillColor(DARK_GREEN).text("What guests love:");
-                        drawBulletList(doc, reviewThemes.positive_themes);
+                        drawBulletList(doc, reviewThemes.positive_themes, { spaced: true });
                     }
                     if (Array.isArray(reviewThemes.negative_themes) && reviewThemes.negative_themes.length > 0) {
                         ensureSpace(doc, 20);
                         doc.fontSize(10).fillColor("#B5453A").text("Areas of concern:");
-                        drawBulletList(doc, reviewThemes.negative_themes);
+                        drawBulletList(doc, reviewThemes.negative_themes, { spaced: true });
                     }
                     if (Array.isArray(reviewThemes.recurring_issues) && reviewThemes.recurring_issues.length > 0) {
                         ensureSpace(doc, 20);
                         doc.fontSize(10).fillColor("#D4785A").text("Recurring issues:");
-                        drawBulletList(doc, reviewThemes.recurring_issues);
+                        drawBulletList(doc, reviewThemes.recurring_issues, { spaced: true });
                     }
                 }
 
                 // --- Strengths ---
                 if (Array.isArray(analysis.strengths) && analysis.strengths.length > 0) {
                     drawSectionHeader(doc, "Your Strengths");
-                    drawBulletList(doc, analysis.strengths);
+                    drawBulletList(doc, analysis.strengths, { spaced: true });
                 }
 
                 // --- Revenue Leaks ---
                 if (Array.isArray(analysis.revenue_leaks) && analysis.revenue_leaks.length > 0) {
                     drawSectionHeader(doc, "Revenue Leaks");
                     doc.fontSize(9).fillColor(MEDIUM_GREY).text("These issues may be costing you bookings:");
-                    drawBulletList(doc, analysis.revenue_leaks, { numbered: true });
+                    drawBulletList(doc, analysis.revenue_leaks, { numbered: true, spaced: true });
                 }
 
                 // --- Instant Fixes ---
@@ -416,7 +421,7 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
                 // --- Overall Improvements ---
                 if (Array.isArray(analysis.overall_improvements) && analysis.overall_improvements.length > 0) {
                     drawSectionHeader(doc, "Recommended Improvements");
-                    drawBulletList(doc, analysis.overall_improvements, { numbered: true });
+                    drawBulletList(doc, analysis.overall_improvements, { numbered: true, spaced: true });
                 }
 
                 // --- 7-Day Action Plan ---
