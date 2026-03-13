@@ -66,24 +66,24 @@ function drawScoreBar(doc, x, y, width, score, max, height = 10) {
 }
 
 function addPageFooter(doc) {
-    const bottom = doc.page.height - 40;
+    const bottom = doc.page.height - 30;
     doc.fontSize(8).fillColor(MEDIUM_GREY)
         .text("LetGrow — Where holiday lets grow | www.letgrow.co.uk", 50, bottom, { align: "center", width: doc.page.width - 100 });
 }
 
 function ensureSpace(doc, needed) {
-    if (doc.y + needed > doc.page.height - 60) {
+    if (doc.y + needed > doc.page.height - 45) {
         doc.addPage();
         addPageFooter(doc);
     }
 }
 
 function drawSectionHeader(doc, title) {
-    ensureSpace(doc, 40);
-    doc.moveDown(0.5);
-    doc.fontSize(14).fillColor(DARK_GREEN).text(title, { underline: false });
+    ensureSpace(doc, 36);
+    doc.moveDown(0.4);
+    doc.fontSize(13).fillColor(DARK_GREEN).text(title, { underline: false });
     doc.moveTo(50, doc.y).lineTo(doc.page.width - 50, doc.y).strokeColor(GOLD).lineWidth(1).stroke();
-    doc.moveDown(0.3);
+    doc.moveDown(0.2);
 }
 
 function extractItemText(item) {
@@ -159,12 +159,14 @@ function drawBulletList(doc, items, options = {}) {
     if (!Array.isArray(items)) return;
     items.forEach((item, i) => {
         const text = extractItemText(item);
-        // Estimate height needed based on text length
-        const estimatedLines = Math.ceil(text.length / 80) + (text.split("\n").length - 1);
-        ensureSpace(doc, Math.max(20, estimatedLines * 14));
+        // Estimate height — use actual available width for more accurate line count
+        const availWidth = doc.page.width - indent - 50;
+        const charsPerLine = Math.floor(availWidth / 5); // ~5pt per char at font size 10
+        const estimatedLines = Math.ceil(text.length / charsPerLine) + (text.split("\n").length - 1);
+        ensureSpace(doc, Math.max(14, estimatedLines * 13));
         const prefix = numbered ? `${i + 1}. ` : "• ";
-        doc.fontSize(10).fillColor(BODY_TEXT).text(`${prefix}${text}`, indent, doc.y, { width: doc.page.width - indent - 50 });
-        doc.moveDown(0.3);
+        doc.fontSize(10).fillColor(BODY_TEXT).text(`${prefix}${text}`, indent, doc.y, { width: availWidth });
+        doc.moveDown(0.15);
     });
 }
 
@@ -253,7 +255,7 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
             if (snapshot?.location_text) {
                 doc.fontSize(9).fillColor(MEDIUM_GREY).text(snapshot.location_text);
             }
-            doc.moveDown(0.8);
+            doc.moveDown(0.5);
 
             // ===================== OVERALL SCORE =====================
             const overallScore = scores?.overall_score ?? 0;
@@ -275,7 +277,7 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
             doc.fontSize(9).fillColor(BODY_TEXT)
                 .text("Your LetGrow Score measures how well your listing performs across six key areas that drive bookings.", 170, boxY + 42, { width: doc.page.width - 250 });
 
-            doc.y = boxY + 85;
+            doc.y = boxY + 80;
 
             // ===================== CATEGORY BREAKDOWN =====================
             drawSectionHeader(doc, "Score Breakdown");
@@ -293,11 +295,11 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
             ];
 
             categories.forEach((cat) => {
-                ensureSpace(doc, 50);
+                ensureSpace(doc, 44);
                 const catY = doc.y;
 
                 // Category name + score
-                doc.fontSize(11).fillColor(DARK_GREEN)
+                doc.fontSize(10).fillColor(DARK_GREEN)
                     .text(`${cat.label}`, 50, catY, { continued: true })
                     .fillColor(MEDIUM_GREY).fontSize(8).text(`  (${cat.weight})`, { continued: false });
 
@@ -305,15 +307,15 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
                     .text(`${cat.score ?? 0} / ${cat.max}`, doc.page.width - 120, catY, { width: 70, align: "right" });
 
                 // Score bar
-                drawScoreBar(doc, 50, catY + 18, doc.page.width - 170, cat.score ?? 0, cat.max);
+                drawScoreBar(doc, 50, catY + 16, doc.page.width - 170, cat.score ?? 0, cat.max);
 
                 // Message
                 const msg = categoryMessages.find((m) => String(m?.category || "").toLowerCase().includes(cat.key));
                 if (msg?.message) {
-                    doc.fontSize(9).fillColor(BODY_TEXT).text(msg.message, 50, catY + 32, { width: doc.page.width - 100 });
+                    doc.fontSize(9).fillColor(BODY_TEXT).text(msg.message, 50, catY + 28, { width: doc.page.width - 100 });
                 }
 
-                doc.y = Math.max(doc.y, catY + 32) + 12;
+                doc.y = Math.max(doc.y, catY + 28) + 8;
             });
 
             // ===================== TOP FIXES =====================
@@ -381,12 +383,12 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
                         drawBulletList(doc, reviewThemes.positive_themes);
                     }
                     if (Array.isArray(reviewThemes.negative_themes) && reviewThemes.negative_themes.length > 0) {
-                        ensureSpace(doc, 30);
+                        ensureSpace(doc, 20);
                         doc.fontSize(10).fillColor("#B5453A").text("Areas of concern:");
                         drawBulletList(doc, reviewThemes.negative_themes);
                     }
                     if (Array.isArray(reviewThemes.recurring_issues) && reviewThemes.recurring_issues.length > 0) {
-                        ensureSpace(doc, 30);
+                        ensureSpace(doc, 20);
                         doc.fontSize(10).fillColor("#D4785A").text("Recurring issues:");
                         drawBulletList(doc, reviewThemes.recurring_issues);
                     }
@@ -488,8 +490,8 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
 
             // ===================== CTA (Free/Pro only) =====================
             if (tier === "free") {
-                ensureSpace(doc, 80);
-                doc.moveDown(1);
+                ensureSpace(doc, 70);
+                doc.moveDown(0.5);
                 const ctaY = doc.y;
                 doc.roundedRect(50, ctaY, doc.page.width - 100, 60, 8).fill(DEEP_GREEN);
                 doc.fontSize(12).fillColor(CREAM)
@@ -497,8 +499,8 @@ export async function generatePdf({ submission, scores, snapshot, analysis, tier
                 doc.fontSize(10).fillColor(GOLD)
                     .text("Upgrade to Pro at www.letgrow.co.uk", 70, ctaY + 35, { width: doc.page.width - 140, align: "center" });
             } else if (tier === "pro") {
-                ensureSpace(doc, 80);
-                doc.moveDown(1);
+                ensureSpace(doc, 70);
+                doc.moveDown(0.5);
                 const ctaY = doc.y;
                 doc.roundedRect(50, ctaY, doc.page.width - 100, 60, 8).fill(DEEP_GREEN);
                 doc.fontSize(12).fillColor(CREAM)

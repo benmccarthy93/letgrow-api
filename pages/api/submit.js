@@ -42,11 +42,18 @@ function generateJobId() {
 
 function extractAirbnbListingId(url) {
   const value = String(url || "").trim();
-  const match = value.match(/airbnb\.[^/]+\/rooms\/(\d+)/i);
 
-  if (match && match[1]) {
-    return match[1];
-  }
+  // Match /rooms/{id} (guest-facing URL)
+  const roomsMatch = value.match(/airbnb\.[^/]+\/rooms\/(\d+)/i);
+  if (roomsMatch && roomsMatch[1]) return roomsMatch[1];
+
+  // Match /hosting/listings/editor/{id} (host dashboard URL)
+  const hostingMatch = value.match(/airbnb\.[^/]+\/hosting\/listings\/editor\/(\d+)/i);
+  if (hostingMatch && hostingMatch[1]) return hostingMatch[1];
+
+  // Match /hosting/listings/{id} (host listings URL)
+  const hostingListMatch = value.match(/airbnb\.[^/]+\/hosting\/listings\/(\d+)/i);
+  if (hostingListMatch && hostingListMatch[1]) return hostingListMatch[1];
 
   return null;
 }
@@ -86,36 +93,29 @@ function buildProcessNextUrl() {
   return `${APP_BASE_URL.replace(/\/+$/, "")}/api/process-next`;
 }
 
-async function triggerProcessing(jobId) {
+function triggerProcessing(jobId) {
   const processNextUrl = buildProcessNextUrl();
 
   if (!processNextUrl || !INTERNAL_API_SECRET) {
     console.error("Processing trigger skipped: missing config");
-    return false;
+    return;
   }
 
-  try {
-    const response = await fetch(processNextUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-internal-secret": INTERNAL_API_SECRET,
-      },
-      body: JSON.stringify({
-        job_id: jobId,
-      }),
-    });
-
-    if (!response.ok) {
-      console.error("Processing trigger returned non-OK:", response.status);
-      return false;
-    }
-
-    return true;
-  } catch (error) {
+  // Fire the request but do NOT await the response — process-next runs as
+  // its own serverless function and can take 20-30s. We just need to ensure
+  // the HTTP request is dispatched so Vercel spins up the function.
+  fetch(processNextUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-internal-secret": INTERNAL_API_SECRET,
+    },
+    body: JSON.stringify({
+      job_id: jobId,
+    }),
+  }).catch((error) => {
     console.error("Processing trigger failed:", error);
-    return false;
-  }
+  });
 }
 
 export default async function handler(req, res) {
@@ -232,13 +232,16 @@ export default async function handler(req, res) {
 
     console.log(JSON.stringify({ event: "pipeline", stage: "submitted", job_id: submission.job_id, submission_id: submission.id, tier, email: trimmedEmail }));
 
-    const processingStarted = await triggerProcessing(submission.job_id);
+    // Fire-and-forget: dispatch the request to process-next but don't wait
+    // for it to finish. This returns the response instantly to the user
+    // instead of blocking 20-30s while fetching/scoring runs.
+    triggerProcessing(submission.job_id);
 
     return res.status(200).json({
       success: true,
       job_id: submission.job_id,
       submission_id: submission.id,
-      processing_started: processingStarted,
+      processing_started: true,
     });
   } catch (e) {
     console.error("Unhandled error:", e);
