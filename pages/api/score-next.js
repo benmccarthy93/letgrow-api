@@ -124,17 +124,22 @@ function extractRating(property) {
 // Keyword Lists
 // -----------------------------
 const KEYWORD_LIST = [
+    // Cities (UK)
     "london", "manchester", "birmingham", "edinburgh", "glasgow", "liverpool",
     "bristol", "leeds", "sheffield", "newcastle", "cardiff", "nottingham",
     "cambridge", "oxford", "brighton", "bath", "york", "coventry", "sunderland",
     "leicester", "reading", "milton keynes", "southampton", "portsmouth",
     "dundee", "aberdeen", "norwich", "exeter", "chester", "luton", "inverness",
     "st albans", "kingston upon hull",
+
+    // Property types
     "penthouse", "studio", "apartment", "loft", "house", "cottage", "cabin",
     "villa", "mansion", "barn", "chalet", "townhouse", "duplex", "bungalow",
     "lodge", "barn conversion", "boutique hotel", "cottage retreat",
     "designer flat", "luxury villa", "waterfront villa", "seaside cottage",
     "flat", "retreat", "modern home", "cozy retreat", "beach house",
+
+    // Location features
     "city centre", "seaside", "riverside", "central", "quiet", "countryside",
     "mountain view", "lake view", "harbour view", "suburban", "rural",
     "near beach", "close to public transport", "scenic views",
@@ -142,20 +147,39 @@ const KEYWORD_LIST = [
     "valley view", "close to shops", "close to restaurants",
     "quiet neighborhood", "quiet area", "beachfront", "lakefront",
     "near train station", "near the beach", "near parks",
+    "near transport", "walkable", "walkable location",
+
+    // Quality / style
     "luxury", "high-end", "designer", "exclusive", "premium", "spacious",
     "stylish", "opulent", "secluded", "private", "elegant", "grand", "chic",
     "upscale", "lavish", "state-of-the-art", "modern", "boutique",
-    "hot tub", "sauna", "pool", "jacuzzi", "swimming pool", "gym", "spa",
-    "bbq area", "fully equipped kitchen", "washer/dryer", "dishwasher",
-    "coffee machine", "hairdryer", "ironing facilities", "secure entry",
-    "private garden", "balcony", "patio", "outdoor dining area", "fireplace",
-    "smart tv", "wi-fi", "free parking", "free wi-fi", "office space", "desk",
-    "coffee table", "dining table", "microwave", "toaster", "freezer", "fridge",
+    "bright", "comfortable",
+
+    // High-impact amenities (guest search filters — ranked by booking impact)
+    "self check-in", "self check in",
+    "wifi", "wi-fi", "fast wifi", "free wi-fi",
+    "air conditioning", "a/c",
+    "free parking", "parking",
+    "pool", "swimming pool",
+    "hot tub", "jacuzzi",
+    "dedicated workspace", "workspace", "desk", "office space",
+    "pet-friendly", "pets allowed",
+    "washer", "washing machine", "washer/dryer",
+    "kitchen", "fully equipped kitchen", "kitchenette",
+    "lift", "elevator",
+    "balcony", "terrace", "patio",
+    "sauna", "gym", "spa",
+    "bbq area", "bbq",
+    "dishwasher", "coffee machine", "hairdryer", "ironing facilities",
+    "secure entry", "private garden", "outdoor dining area", "fireplace",
+    "smart tv", "dining table", "microwave", "toaster", "freezer", "fridge",
     "hangers", "towels", "bed linen", "shower gel", "conditioner", "body soap",
-    "eco-friendly", "ev charger", "cleaning products", "air conditioning",
-    "heating", "travel cot", "high chair", "cot", "lift", "elevator",
-    "pets allowed", "bbq", "pool table", "table tennis",
-    "family-friendly", "pet-friendly", "romantic getaway", "business travel",
+    "eco-friendly", "ev charger", "cleaning products",
+    "heating", "travel cot", "high chair", "cot",
+    "pool table", "table tennis", "coffee table",
+
+    // Guest types and use cases
+    "family-friendly", "romantic getaway", "business travel",
     "corporate", "ideal for groups", "cozy", "secluded retreat", "luxury stay",
     "countryside escape", "weekend getaway", "rural escape",
     "peaceful hideaway", "seaside escape", "city break", "wellness retreat",
@@ -164,11 +188,15 @@ const KEYWORD_LIST = [
     "group stay", "corporate stay", "relaxing retreat",
     "peaceful stay", "perfect for couples", "ideal for families",
     "secluded escape", "coastal retreat", "countryside retreat", "quiet escape",
+    "long stay", "work base",
+
+    // Views and finishes
     "pool view", "sea view", "river view",
     "fully furnished", "newly renovated", "bright and airy", "modern design",
-    "spacious living", "comfortable", "fully equipped",
+    "spacious living", "fully equipped",
     "near attractions", "close to parks", "close to the river", "near museums",
     "close to nightlife",
+    "value",
   ];
 
 const UNIQUE_KEYWORDS = [...new Set(KEYWORD_LIST)];

@@ -32,11 +32,11 @@ STRATEGY: You have exactly 50 characters to work with. Every character matters. 
 KEYWORDS THAT COUNT (case-insensitive, partial match):
 Cities: london, manchester, birmingham, edinburgh, glasgow, liverpool, bristol, leeds, sheffield, newcastle, cardiff, nottingham, cambridge, oxford, brighton, bath, york, coventry, leicester, reading, southampton, portsmouth, dundee, aberdeen, norwich, exeter, chester, inverness
 Property types: penthouse, studio, apartment, loft, house, cottage, cabin, villa, barn, chalet, townhouse, duplex, bungalow, lodge, flat, retreat
-Location: city centre, seaside, riverside, central, quiet, countryside, mountain view, lake view, waterfront, near beach, close to public transport, beachfront, near train station
-Quality: luxury, spacious, stylish, modern, boutique, elegant, chic
-Amenities in title: hot tub, sauna, pool, free parking, free wi-fi, balcony, fireplace, garden, patio
-Guest type: family-friendly, pet-friendly, romantic getaway, business travel, city break, group stay
-Features: fully furnished, newly renovated, bright and airy, modern design, spacious living
+Location: city centre, seaside, riverside, central, quiet, countryside, mountain view, lake view, waterfront, near beach, beachfront, near train station, near transport, walkable
+Quality: luxury, spacious, stylish, modern, boutique, elegant, chic, bright, comfortable
+High-impact amenities: self check-in, wifi, air conditioning, free parking, parking, pool, hot tub, dedicated workspace, workspace, desk, pet-friendly, pets allowed, washer, kitchen, lift, elevator, balcony, terrace, patio, sauna, fireplace, garden
+Guest type: family-friendly, pet-friendly, romantic getaway, business travel, city break, group stay, long stay
+Features: fully furnished, newly renovated, bright and airy, modern design, spacious living, value
 `;
 
 const DESCRIPTION_SCORING_RULES = `
@@ -161,6 +161,18 @@ IMPORTANT RULES:
 7. The title should lead with the strongest differentiator
 8. The description should open with a punchy hook that tells guests exactly who this is for and why it's special
 9. Emojis are OK in the description if the original listing uses them, but use sparingly
+
+CRITICAL — PROPERTY TYPE ACCURACY:
+- You MUST use the EXACT property type provided in the "Type" and "Room type" fields below. If the listing is a "cabin", call it a cabin — NOT a cottage, house, or lodge. If it's a "flat", don't call it an apartment. If it's a "barn", don't call it a cottage.
+- The property type comes directly from Airbnb's own classification. Changing it is factually wrong and misleading.
+- If the property type is "Unknown", infer it from the current title and description — but never guess wildly.
+- The location must also be accurate. If the listing is in Loxley, don't say Cotswolds. Use the location data provided.
+
+KEYWORD STRATEGY (based on Airbnb search behaviour):
+- Highest-impact keywords for search: self check-in, wifi, air conditioning, free parking, pool, hot tub, dedicated workspace, pet-friendly, washer, kitchen, lift/elevator, balcony/terrace
+- Front-load the title with the strongest differentiator that the property ACTUALLY has
+- In the description, naturally weave in amenity keywords that guests actively filter for
+- Use "&" instead of "and", "w/" for "with", "nr" for "near" to save characters in the title
 
 Respond with ONLY valid JSON, no markdown code blocks.`;
 
