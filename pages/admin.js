@@ -96,7 +96,14 @@ function SubmissionRow({ sub, onForce, onDetail, onRetry, onRetryProcessing, for
             </td>
             <td style={td}><PipelineSteps status={sub.status} pipeline={sub.pipeline} /></td>
             <td style={{ ...td, textAlign: "center", fontSize: 12 }}>
-                {sub.pipeline?.score ? <strong>{sub.pipeline.score.overall_score}</strong> : <span style={{ color: "#D1D5DB" }}>-</span>}
+                {sub.pipeline?.score ? (
+                    <div>
+                        <strong>{sub.pipeline.score.overall_score}</strong>
+                        {sub.pipeline.score.rate_data_missing && (
+                            <div style={{ fontSize: 9, color: "#D97706", marginTop: 2 }} title="AirROI rate data was not available — competitive positioning scored 0">No rate data</div>
+                        )}
+                    </div>
+                ) : <span style={{ color: "#D1D5DB" }}>-</span>}
             </td>
             <td style={{ ...td, textAlign: "center" }}>
                 {sub.pipeline?.email?.status === "pending" && sub.pipeline.email.send_at && (() => {
